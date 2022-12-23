@@ -1,0 +1,48 @@
+@html.extend('layout',function(model){
+
+@html.block("scripts",function(model){
+<script src="/js/BibleApp.js"></script>
+
+})
+
+
+@html.block("body",function(model){
+
+<div ng-controller="accountController as account" class="row">
+
+    <div class="col-lg-6 container" style=" overflow-y: auto; max-height: 800px;">
+
+
+
+        <div ng-repeat='verse in account.MyFavoriteVerses' >
+
+           <h1>{{verse.reference}}</h1>
+
+            <div ng-bind-html="account.renderHtml(verse.text)">
+
+
+
+            </div>
+
+             <div class="text-center">
+                    <a href="#" ng-click="account.removeFromFavorites(verse)"><i class="fa fa-minus"></i> Remover de favoritos</a>
+                </div>
+
+        </div>
+
+
+    </div>
+
+
+
+
+
+</div>
+
+
+
+
+
+    })
+
+})
