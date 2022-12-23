@@ -1,4 +1,4 @@
-
+require('dotenv').config()
 const getConfig = () => {
   if (process.env.MONGO_URL && process.env.DB_NAME) {
     return {
@@ -8,12 +8,7 @@ const getConfig = () => {
       }
     };
   }
-  try {
-    const keys = require('./keys')
-    return keys
-  }catch(err) {
-    throw err
-  }
+ 
 };
 
 module.exports = getConfig()

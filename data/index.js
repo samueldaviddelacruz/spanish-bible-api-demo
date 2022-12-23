@@ -129,35 +129,30 @@
   };
 
   data.getVersesFromChapterUntilVerse = async (bookId, verseRange) => {
+
     try {
-      let [startChapterNumber, endChapterAndVerse] = verseRange.split("-");
-      let [endChapterNumber, endVerseNumber] = endChapterAndVerse.split(":");
-      startChapterNumber = +startChapterNumber;
-      endChapterNumber = +endChapterNumber;
-      endVerseNumber = +endVerseNumber;
-      const { startChapter, endChapter } = await getStartAndEndChapters(
-        bookId,
-        startChapterNumber,
-        endChapterNumber
-      );
-      const chaptersMap = await getBookChaptersMap(bookId);
-      const result = [];
-      if (startChapter && endChapter) {
-        let chapterIdList = getChapterIdList(
-          startChapterNumber,
-          endChapterNumber,
-          chaptersMap
+      let [startChapterNumber, startVerseAndEndVerse] = verseRange.split("-");
+      let [verseStart,verseEnd] = startVerseAndEndVerse.split(":");
+        startChapterNumber = +startChapterNumber;
+        verseStart = +verseStart;
+        verseEnd = +verseEnd;
+        const chaptersMap = await getBookChaptersMap(bookId);
+        const chapter = chaptersMap[startChapterNumber];
+        const verses = await data.getBibleVersesByChapterId(
+          chapter.id
         );
-
-        const verses = await findManyVersesByChapterIds(chapterIdList);
-        result.push(...verses);
-        const endChapterVerses = await data.getBibleVersesByChapterId(
-          endChapter.id
-        );
-
-        result.push(...endChapterVerses.slice(0, endVerseNumber));
-        return result;
-      }
+        const versesMap = verses.reduce((acc, verse) => {
+         
+          return {...acc,[verse.id]:verse};
+         }, {});
+        let result = []
+        for(let i = verseStart; i <= verseEnd; i++){
+          const verse = versesMap[`${chapter.id}.${i}`];
+          if(verse){
+            result.push(versesMap[`${chapter.id}.${i}`])
+          }
+        }
+        return result
     } catch (err) {
       console.log(err);
       return []
@@ -220,36 +215,11 @@
       startVerseNumber = +startVerseNumber;
       endChapterNumber = +endChapterNumber;
       endVerseNumber = +endVerseNumber;
-      const { startChapter, endChapter } = await getStartAndEndChapters(
-        bookId,
-        startChapterNumber,
-        endChapterNumber
-      );
-
-      const chaptersMap = await getBookChaptersMap(bookId);
-
-      const result = [];
-      if (startChapter && endChapter) {
-        const startChapterVerses = await data.getBibleVersesByChapterId(
-          startChapter.id
-        );
-        result.push(...startChapterVerses.slice(startVerseNumber - 1));
-
-        let chapterIdList = getChapterIdList(
-          startChapterNumber + 1,
-          endChapterNumber - 1,
-          chaptersMap
-        );
-
-        const verses = await findManyVersesByChapterIds(chapterIdList);
-        result.push(...verses);
-        const endChapterVerses = await data.getBibleVersesByChapterId(
-          endChapter.id
-        );
-
-        result.push(...endChapterVerses.slice(0, endVerseNumber));
-        return result;
-      }
+      const verses = await data.getVersesFromChapterToChapter(bookId, `${startChapterNumber}-${endChapterNumber}`);
+      const startVerseIndex = verses.findIndex(verse => verse.id === `${bookId}.${startChapterNumber}.${startVerseNumber}`);
+      const endVerseIndex = verses.findIndex(verse => verse.id === `${bookId}.${endChapterNumber}.${endVerseNumber}`);
+      const result = verses.slice(startVerseIndex, endVerseIndex + 1);
+      return result;
     } catch (err) {
       console.log(err);
       return []
@@ -259,29 +229,29 @@
     try {
       let [startChapterNumber, endChapterNumber] = verseRange.split("-");
       startChapterNumber = +startChapterNumber;
-      endChapterNumber = +endChapterNumber;
-      const { startChapter, endChapter } = await getStartAndEndChapters(
-        bookId,
-        startChapterNumber,
-        endChapterNumber
-      );
+      endChapterNumber = +endChapterNumber;   
       const chaptersMap = await getBookChaptersMap(bookId);
       const result = [];
-      if (startChapter && endChapter) {
-        let chapterIdList = getChapterIdList(
-          startChapterNumber,
-          endChapterNumber,
-          chaptersMap
-        );
-        const verses = await findManyVersesByChapterIds(chapterIdList);
+      for(let i = startChapterNumber; i <= endChapterNumber; i++){
+        const chapter = chaptersMap[i];
+        const versesEnd = +chapter.osis_end.split(".")[2];
+        const verses = await data.getBibleVersesByChapterId(chapter.id);
+        const versesMap = verses.reduce((acc, verse) => {
+          return {...acc,[verse.id]:verse};
+         }, {});
+         for(let i = 1; i <= versesEnd; i++){
+          const verse = versesMap[`${chapter.id}.${i}`];
+          if(verse){
+            result.push(verse)
+          }
+         }
         result.push(...verses);
-        return result;
       }
+      return result;
     } catch (err) {
       console.log(err);
       throw err;
     }
-    return [];
   };
 
   data.getBibleVersesByChapterId = async id => {

@@ -15,9 +15,7 @@
         app.get(`/api/books/:bookId/verses/:verseRange(\\d+:\\d+)`,ApiRequestHandler.onGetVerseByChapterAndVerseNumber); 
 
         app.get(`/api/books/:bookId/verses/:verseRange(\\d+-\\d+:\\d+)`,ApiRequestHandler.onGetVersesFromChapterUntilVerse);
-        
-        app.get(`/api/books/:bookId/verses/:verseRange(\\d+:\\d+-\\d+)`,ApiRequestHandler.onGetVersesFromVerseUntilChapter);
-
+    
         app.get(`/api/books/:bookId/verses/:verseRange(\\d+:\\d+-\\d+:\\d+)`,ApiRequestHandler.onGetVersesFromVerseToVerse);
         
         app.get(`/api/books/:bookId/verses/:verseRange(\\d+-\\d+)`,ApiRequestHandler.onGetVersesFromChapterToChapter);
