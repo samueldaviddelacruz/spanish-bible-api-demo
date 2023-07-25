@@ -2,8 +2,10 @@ require('dotenv').config()
 const http = require('http');
 const port = (process.env.PORT || 5000);
 const express = require('express');
+const cors = require('cors');
 const app = express();
 const controllers = require('./controllers');
+app.use(cors())
 app.set("view engine", "vash");//set view engine
 app.use(express.static(__dirname + "/public"));
 //opt into services
