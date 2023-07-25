@@ -1,0 +1,35 @@
+name: Deploy master to EBS
+on:
+  push:
+    branches:
+    - master
+env:
+  NODE_VERSION: '16.x'    # set this to the node version to use 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Checkout source code
+      uses: actions/checkout@v3
+
+    - name: Use Node.js ${{ env.NODE_VERSION }} To run Tests
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    - run: npm install
+
+    - name: Generate deployment package
+      run: zip -r ${{github.SHA}}.zip . -x '*.git*' -x '*node_modules*'
+      
+    - name: Deploy to EB
+      uses: einaregilsson/beanstalk-deploy@v16
+      with:
+        aws_access_key: ${{ secrets.AWS_CI_CD_ACCESS_KEY_ID }}
+        aws_secret_key: ${{ secrets.AWS_CI_CD_SECRET_ACCESS_KEY }}
+        application_name: Bible-API-24-7-2023
+        environment_name: Bible-API-24-7-2023-env
+        version_label: Version_${{github.SHA}}
+        version_description: ${{github.SHA}}
+        region: us-west-2
+        deployment_package: ${{github.SHA}}.zip
