@@ -15,8 +15,7 @@ app.use(bodyParser.json());
 app.use(expressSession({secret: "thesecret"}));
 app.use(flash());
 app.use(CookieParser());
-const auth = require('./auth');
-auth.init(app);
+
 
 controllers.init(app);
 

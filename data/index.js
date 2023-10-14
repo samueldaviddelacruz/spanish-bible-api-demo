@@ -1,100 +1,18 @@
-(data => {
-  const database = require("./database");
-
-  data.getUser = async username => {
-    try {
-      const db = await database.getDb();
-
-      const user = await db.usuarios.findOne({
-        username: username.toUpperCase()
-      });
-
-      return user;
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  data.addUser = async user => {
-    try {
-      const db = await database.getDb();
-      return await db.usuarios.insert(user);
-    } catch (err) {
-      console.log(err);
-      throw err;
-    }
-  };
-
-  data.addToFavorite = async (username, verseData, next) => {
-    try {
-      const db = await database.getDb();
-      db.usuarios.update(
-        { username: username },
-        { $addToSet: { MyFavoriteVerses: verseData } },
-        next
-      );
-    } catch (err) {
-      next(err);
-    }
-  };
-
-  data.removeFromFavorites = async (username, verseData) => {
-    try {
-      const db = await database.getDb();
-      await db.usuarios.update(
-        { username: username },
-        { $pull: { MyFavoriteVerses: verseData } }
-      );
-    } catch (err) {
-      console.log(err);
-      throw err;
-    }
-  };
-
-  data.getFavoriteVerses = async (username, next) => {
-    try {
-      const db = await database.getDb();
-
-      const user = await db.usuarios.findOne({
-        username: username.toUpperCase()
-      });
-
-      let verses = [];
-      for (const fav of user.MyFavoriteVerses) {
-        const verse = await data.getBibleVerseById(fav.verseId);
-        verses.push(verse);
-      }
-
-      return verses;
-    } catch (err) {
-      console.log(err);
-      throw err;
-    }
-  };
+((data) => {
+  const { sqliteDb } = require("./sqliteDb");
 
   data.getBibleBooks = async () => {
     try {
-      const db = await database.getDb();
-
-      const books = await db.bibleBooks
-        .find({}, { projection: { _id: 0 } })
-        .toArray();
-
+      const books = sqliteDb.prepare("SELECT * FROM books").all();
       return books;
     } catch (err) {
       throw err;
     }
   };
 
-  data.getBibleBookById = async id => {
+  data.getBibleBookById = async (id) => {
     try {
-      const db = await database.getDb();
-
-      const book = await db.bibleBooks.findOne(
-        { id },
-        { projection: { _id: 0 } }
-      );
-
+      const book = sqliteDb.prepare("SELECT * FROM books WHERE id = ?").get(id);
       return book;
     } catch (err) {
       throw err;
@@ -103,219 +21,149 @@
 
   data.getVersesByChapterNumber = async (bookId, chapterNumber) => {
     try {
-      const book = await data.getBibleBookById(bookId);
-      const chapter = book.chapters.find(c => c.chapter === chapterNumber);
-      if (!chapter) {
+      const verses = sqliteDb
+        .prepare("SELECT * FROM verses WHERE chapterId = ?")
+        .all(`${bookId}.${chapterNumber}`);
+      if (!verses) {
         return [];
       }
-      return await data.getBibleVersesByChapterId(chapter.id);
+      return verses;
     } catch (err) {
-      return []
+      return [];
     }
   };
 
   data.getVerseByChapterAndVerseNumber = async (bookId, verseRange) => {
     try {
       const [chapterNumber, verseNumber] = verseRange.split(":");
-      const book = await data.getBibleBookById(bookId);
-      const chapter = book.chapters.find(c => c.chapter === chapterNumber);
-      const verseId = `${chapter.id}.${verseNumber}`;
-      const result = await data.getBibleVerseById(verseId);
-
-      return [result];
+      const chapterId = `${bookId}.${chapterNumber}`;
+      const verseId = `${chapterId}.${verseNumber}`;
+      const verse = sqliteDb
+        .prepare("SELECT * FROM verses WHERE id = ?")
+        .get(verseId);
+      return [verse];
     } catch (err) {
-      return []
+      console.log(err);
+      return [];
     }
   };
 
   data.getVersesFromChapterUntilVerse = async (bookId, verseRange) => {
-
     try {
-      let [startChapterNumber, startVerseAndEndVerse] = verseRange.split("-");
-      let [verseStart,verseEnd] = startVerseAndEndVerse.split(":");
-        startChapterNumber = +startChapterNumber;
-        verseStart = +verseStart;
-        verseEnd = +verseEnd;
-        const chaptersMap = await getBookChaptersMap(bookId);
-        const chapter = chaptersMap[startChapterNumber];
-        const verses = await data.getBibleVersesByChapterId(
-          chapter.id
-        );
-        const versesMap = verses.reduce((acc, verse) => {
-         
-          return {...acc,[verse.id]:verse};
-         }, {});
-        let result = []
-        for(let i = verseStart; i <= verseEnd; i++){
-          const verse = versesMap[`${chapter.id}.${i}`];
-          if(verse){
-            result.push(versesMap[`${chapter.id}.${i}`])
-          }
-        }
-        return result
-    } catch (err) {
-      console.log(err);
-      return []
-    }
-  };
-  data.getVersesFromVerseUntilChapter = async (bookId, verseRange) => {
-    try {
-      let [startChapterAndVerse, endChapterNumber] = verseRange.split("-");
-      let [startChapterNumber, startVerseNumber] = startChapterAndVerse.split(
-        ":"
-      );
-      endChapterNumber = +endChapterNumber;
-      startChapterNumber = +startChapterNumber;
-      startVerseNumber = +startVerseNumber;
-      let result = [];
-      let chaptersMap = await getBookChaptersMap(bookId);
-      const { startChapter, endChapter } = await getStartAndEndChapters(
-        bookId,
-        startChapterNumber,
-        endChapterNumber
-      );
-
-      if (startChapter && endChapter) {
-        const firstBatchOfVerses = await data.getBibleVersesByChapterId(
-          startChapter.id
-        );
-       
-        
-
-        result.push(...firstBatchOfVerses.slice(startVerseNumber - 1));
-
-        let chapterIdList = getChapterIdList(
-          startChapterNumber+1,
-          endChapterNumber,
-          chaptersMap
-        );
-
-        const verses = await findManyVersesByChapterIds(chapterIdList);
-        result.push(...verses);
-
-        return result
+      let [startChapterNumber, endChapterAndEndVerse] = verseRange.split("-");
+      let [endChapterNumber, endVerseNumber] = endChapterAndEndVerse.split(":");
+      const startChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${startChapterNumber}`);
+      const endChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${endChapterNumber}`);
+      const startChapterLastVerseNumber = +startChapter.osis_end.split(".")[2];
+      let startRangeVerses = [];
+      let endRangeVerses = [];
+      let sortingMap = {};
+      for (let i = 1; i <= startChapterLastVerseNumber; i++) {
+        startRangeVerses.push(`${bookId}.${startChapter.chapter}.${i}`);
       }
-
-      return [];
+      for (let i = 1; i <= endVerseNumber; i++) {
+        endRangeVerses.push(`${bookId}.${endChapter.chapter}.${i}`);
+      }
+      const versesToLookUp = [...startRangeVerses, ...endRangeVerses];
+      for (let i = 0; i < versesToLookUp.length; i++) {
+        sortingMap[versesToLookUp[i]] = i;
+      }
+      const verses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE id IN (${versesToLookUp
+            .map((v) => "?")
+            .join(",")})`
+        )
+        .all(...versesToLookUp);
+      return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
     } catch (err) {
       console.log(err);
-      return []
+      return [];
     }
-    
   };
 
   data.getVersesFromVerseToVerse = async (bookId, verseRange) => {
     try {
       let [startChapterAndVerse, endChapterAndVerse] = verseRange.split("-");
-      let [startChapterNumber, startVerseNumber] = startChapterAndVerse.split(
-        ":"
-      );
+      let [startChapterNumber, startVerseNumber] =
+        startChapterAndVerse.split(":");
       let [endChapterNumber, endVerseNumber] = endChapterAndVerse.split(":");
-      startChapterNumber = +startChapterNumber;
-      startVerseNumber = +startVerseNumber;
-      endChapterNumber = +endChapterNumber;
-      endVerseNumber = +endVerseNumber;
-      const verses = await data.getVersesFromChapterToChapter(bookId, `${startChapterNumber}-${endChapterNumber}`);
-      const startVerseIndex = verses.findIndex(verse => verse.id === `${bookId}.${startChapterNumber}.${startVerseNumber}`);
-      const endVerseIndex = verses.findIndex(verse => verse.id === `${bookId}.${endChapterNumber}.${endVerseNumber}`);
-      const result = verses.slice(startVerseIndex, endVerseIndex + 1);
-      return result;
+      let startRangeVerses = [];
+      let endRangeVerses = [];
+      const initialChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${startChapterNumber}`);
+      const endChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${endChapterNumber}`);
+      const initialChapterLastVerseNumber =
+        +initialChapter.osis_end.split(".")[2];
+      let sortingMap = {};
+      for (let i = startVerseNumber; i <= initialChapterLastVerseNumber; i++) {
+        startRangeVerses.push(`${bookId}.${initialChapter.chapter}.${i}`);
+      }
+      for (let i = 1; i <= endVerseNumber; i++) {
+        endRangeVerses.push(`${bookId}.${endChapter.chapter}.${i}`);
+      }
+      const versesToLookUp = [...startRangeVerses, ...endRangeVerses];
+      for (let i = 0; i < versesToLookUp.length; i++) {
+        sortingMap[versesToLookUp[i]] = i;
+      }
+      const verses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE id IN (${versesToLookUp
+            .map((v) => "?")
+            .join(",")})`
+        )
+        .all(...versesToLookUp);
+      return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
     } catch (err) {
       console.log(err);
-      return []
+      return [];
     }
   };
   data.getVersesFromChapterToChapter = async (bookId, verseRange) => {
     try {
       let [startChapterNumber, endChapterNumber] = verseRange.split("-");
-      startChapterNumber = +startChapterNumber;
-      endChapterNumber = +endChapterNumber;   
-      const chaptersMap = await getBookChaptersMap(bookId);
-      const result = [];
-      for(let i = startChapterNumber; i <= endChapterNumber; i++){
-        const chapter = chaptersMap[i];
-        const versesEnd = +chapter.osis_end.split(".")[2];
-        const verses = await data.getBibleVersesByChapterId(chapter.id);
-        const versesMap = verses.reduce((acc, verse) => {
-          return {...acc,[verse.id]:verse};
-         }, {});
-         for(let i = 1; i <= versesEnd; i++){
-          const verse = versesMap[`${chapter.id}.${i}`];
-          if(verse){
-            result.push(verse)
-          }
-         }
-        result.push(...verses);
+      const initialChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${startChapterNumber}`);
+      const endChapter = sqliteDb
+        .prepare("SELECT * FROM chapters WHERE id = ?")
+        .get(`${bookId}.${endChapterNumber}`);
+      const initialChapterLastVerseNumber =
+        +initialChapter.osis_end.split(".")[2];
+      const endChapterLastVerseNumber = +endChapter.osis_end.split(".")[2];
+      let startRangeVerses = [];
+      let endRangeVerses = [];
+      let sortingMap = {};
+
+      for (let i = 1; i <= initialChapterLastVerseNumber; i++) {
+        startRangeVerses.push(`${bookId}.${initialChapter.chapter}.${i}`);
       }
-      return result;
+      for (let i = 1; i <= endChapterLastVerseNumber; i++) {
+        endRangeVerses.push(`${bookId}.${endChapter.chapter}.${i}`);
+      }
+
+      const versesToLookUp = [...startRangeVerses, ...endRangeVerses];
+      for (let i = 0; i < versesToLookUp.length; i++) {
+        sortingMap[versesToLookUp[i]] = i;
+      }
+      const verses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE id IN (${versesToLookUp
+            .map((v) => "?")
+            .join(",")})`
+        )
+        .all(...versesToLookUp);
+      return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
     } catch (err) {
       console.log(err);
       throw err;
     }
   };
-
-  data.getBibleVersesByChapterId = async id => {
-    try {
-      const db = await database.getDb();
-
-      const versesByChapterId = await db.bibleVerses
-        .find({ chapterId: id }, { projection: { _id: 0 } })
-        .toArray();
-
-      return versesByChapterId;
-    } catch (err) {
-      throw err;
-    }
-  };
-  data.getBibleVerseById = async id => {
-    try {
-      const db = await database.getDb();
-
-      const verse = await db.bibleVerses.findOne(
-        { id },
-        { projection: { _id: 0 } }
-      );
-
-      return verse;
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  function getChapterIdList(startChapterNumber, endChapter, chaptersMap) {
-    const chapterIdList = [];
-    
-    for (let i = +startChapterNumber; i <= +endChapter; i++) {
-      const chapter = chaptersMap[`${i}`];
-      if (chapter) {
-        chapterIdList.push(chapter.id);
-      }
-    }
-    console.log(chapterIdList);
-    return chapterIdList;
-  }
-
-  async function findManyVersesByChapterIds(chapterIdList) {
-    const db = await database.getDb();
-    return await db.bibleVerses
-      .find({ chapterId: { $in: chapterIdList } }, { projection: { _id: 0 } })
-      .toArray();
-  }
-
-  async function getBookChaptersMap(bookId) {
-    const book = await data.getBibleBookById(bookId);
-    return book.chapters.reduce((acc, nextVal) => {
-      return { ...acc, [nextVal.chapter]: nextVal };
-    }, {});
-  }
-  async function getStartAndEndChapters(
-    bookId,
-    startChapterNumber,
-    endChapterNumber
-  ) {
-    const chaptersMap = await getBookChaptersMap(bookId);
-    const startChapter = chaptersMap[`${startChapterNumber}`];
-    const endChapter = chaptersMap[`${endChapterNumber}`];
-    return { startChapter, endChapter };
-  }
 })(module.exports);
