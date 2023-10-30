@@ -4,6 +4,10 @@
   data.getBibleBooks = async () => {
     try {
       const books = sqliteDb.prepare("SELECT * FROM books").all();
+      for(const book of books){
+       const chapters = sqliteDb.prepare("SELECT * FROM chapters WHERE id like ?").all(`%${book.id}%`);
+       book.chapters = chapters.sort((a, b) => a.chapter - b.chapter);
+      }
       return books;
     } catch (err) {
       throw err;
