@@ -97,10 +97,10 @@
         startChapterAndVerse.split(":");
       let [endChapterNumber, endVerseNumber] = endChapterAndVerse.split(":");
    
-      if (startChapterNumber === endChapterNumber) {
+      if ((+startChapterNumber) === (+endChapterNumber)) {
         let verseRange = [];
         let sortingMap = {};
-        for (let i = startVerseNumber; i <= endVerseNumber; i++) {
+        for (let i = (+startVerseNumber); i <= (+endVerseNumber); i++) {
           verseRange.push(`${bookId}.${startChapterNumber}.${i}`);
           sortingMap[`${bookId}.${startChapterNumber}.${i}`] = i;
         }
@@ -113,7 +113,7 @@
           .all(...verseRange);
         return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
       }
-      if (endChapterNumber > startChapterNumber) {
+      if ((+endChapterNumber) > (+startChapterNumber)) {
         let startRangeVerses = [];
         let endRangeVerses = [];
         let sortingMap = {};
@@ -122,11 +122,11 @@
           .prepare("SELECT * FROM chapters WHERE id = ?")
           .get(`${bookId}.${startChapterNumber}`);
         const startChapterLastVerseNumber = +startChapter.osis_end.split(".")[2];
-        for (let i = startVerseNumber; i <= startChapterLastVerseNumber; i++, sortCounter++) {
+        for (let i = (+startVerseNumber); i <= (+startChapterLastVerseNumber); i++, sortCounter++) {
           startRangeVerses.push(`${bookId}.${startChapter.chapter}.${i}`);
           sortingMap[`${bookId}.${startChapter.chapter}.${i}`] = sortCounter;
         }
-        for (let i = 1; i <= endVerseNumber; i++, sortCounter++) {
+        for (let i = 1; i <= (+endVerseNumber); i++, sortCounter++) {
           endRangeVerses.push(`${bookId}.${endChapterNumber}.${i}`);
           sortingMap[`${bookId}.${endChapterNumber}.${i}`] = sortCounter;
         }
