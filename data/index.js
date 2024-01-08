@@ -66,10 +66,10 @@
       let startRangeVerses = [];
       let endRangeVerses = [];
       let sortingMap = {};
-      for (let i = 1; i <= startChapterLastVerseNumber; i++) {
+      for (let i = 1; i <= (+startChapterLastVerseNumber); i++) {
         startRangeVerses.push(`${bookId}.${startChapter.chapter}.${i}`);
       }
-      for (let i = 1; i <= endVerseNumber; i++) {
+      for (let i = 1; i <= (+endVerseNumber); i++) {
         endRangeVerses.push(`${bookId}.${endChapter.chapter}.${i}`);
       }
       const versesToLookUp = [...startRangeVerses, ...endRangeVerses];
