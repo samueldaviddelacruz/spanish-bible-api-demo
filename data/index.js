@@ -4,9 +4,11 @@
   data.getBibleBooks = async () => {
     try {
       const books = sqliteDb.prepare("SELECT * FROM books").all();
-      for(const book of books){
-       const chapters = sqliteDb.prepare("SELECT * FROM chapters WHERE id like ?").all(`%${book.id}%`);
-       book.chapters = chapters.sort((a, b) => a.chapter - b.chapter);
+      for (const book of books) {
+        const chapters = sqliteDb
+          .prepare("SELECT * FROM chapters WHERE id like ?")
+          .all(`%${book.id}%`);
+        book.chapters = chapters.sort((a, b) => a.chapter - b.chapter);
       }
       return books;
     } catch (err) {
@@ -54,36 +56,29 @@
 
   data.getVersesFromChapterUntilVerse = async (bookId, verseRange) => {
     try {
+      console.log("verseRange", verseRange);
       let [startChapterNumber, endChapterAndEndVerse] = verseRange.split("-");
       let [endChapterNumber, endVerseNumber] = endChapterAndEndVerse.split(":");
-      const startChapter = sqliteDb
-        .prepare("SELECT * FROM chapters WHERE id = ?")
-        .get(`${bookId}.${startChapterNumber}`);
-      const endChapter = sqliteDb
-        .prepare("SELECT * FROM chapters WHERE id = ?")
-        .get(`${bookId}.${endChapterNumber}`);
-      const startChapterLastVerseNumber = +startChapter.osis_end.split(".")[2];
-      let startRangeVerses = [];
-      let endRangeVerses = [];
-      let sortingMap = {};
-      for (let i = 1; i <= (+startChapterLastVerseNumber); i++) {
-        startRangeVerses.push(`${bookId}.${startChapter.chapter}.${i}`);
-      }
-      for (let i = 1; i <= (+endVerseNumber); i++) {
-        endRangeVerses.push(`${bookId}.${endChapter.chapter}.${i}`);
-      }
-      const versesToLookUp = [...startRangeVerses, ...endRangeVerses];
-      for (let i = 0; i < versesToLookUp.length; i++) {
-        sortingMap[versesToLookUp[i]] = i;
-      }
-      const verses = sqliteDb
+      const startChapterVerses = sqliteDb
         .prepare(
-          `SELECT * FROM verses WHERE id IN (${versesToLookUp
-            .map((v) => "?")
-            .join(",")})`
+          `SELECT * FROM verses WHERE chapterId LIKE ? AND chapterNumber = ?`
         )
-        .all(...versesToLookUp);
-      return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
+        .all(`%${bookId}%`, startChapterNumber);
+      const endChapterVerses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE chapterId LIKE ? AND chapterNumber = ? AND verseNumber <= ?`
+        )
+        .all(`%${bookId}%`, endChapterNumber, endVerseNumber);
+      if (!startChapterVerses || !endChapterVerses) {
+        return [];
+      }
+      const result = [
+        ...startChapterVerses.sort((a,b) => a.verseNumber - b.verseNumber),
+        ...endChapterVerses.sort((a,b) => a.verseNumber - b.verseNumber),
+      ];
+
+      return result;
+
     } catch (err) {
       console.log(err);
       return [];
@@ -96,46 +91,27 @@
       let [startChapterNumber, startVerseNumber] =
         startChapterAndVerse.split(":");
       let [endChapterNumber, endVerseNumber] = endChapterAndVerse.split(":");
-   
-      if ((+startChapterNumber) === (+endChapterNumber)) {
-        let verseRange = [];
-        let sortingMap = {};
-        for (let i = (+startVerseNumber); i <= (+endVerseNumber); i++) {
-          verseRange.push(`${bookId}.${startChapterNumber}.${i}`);
-          sortingMap[`${bookId}.${startChapterNumber}.${i}`] = i;
-        }
-        const verses = sqliteDb
-          .prepare(
-            `SELECT * FROM verses WHERE id IN (${verseRange
-              .map((v) => "?")
-              .join(",")})`
-          )
-          .all(...verseRange);
-        return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
-      }
-      if ((+endChapterNumber) > (+startChapterNumber)) {
-        let startRangeVerses = [];
-        let endRangeVerses = [];
-        let sortingMap = {};
-        let sortCounter = 0;
-        const startChapter = sqliteDb
-          .prepare("SELECT * FROM chapters WHERE id = ?")
-          .get(`${bookId}.${startChapterNumber}`);
-        const startChapterLastVerseNumber = +startChapter.osis_end.split(".")[2];
-        for (let i = (+startVerseNumber); i <= (+startChapterLastVerseNumber); i++, sortCounter++) {
-          startRangeVerses.push(`${bookId}.${startChapter.chapter}.${i}`);
-          sortingMap[`${bookId}.${startChapter.chapter}.${i}`] = sortCounter;
-        }
-        for (let i = 1; i <= (+endVerseNumber); i++, sortCounter++) {
-          endRangeVerses.push(`${bookId}.${endChapterNumber}.${i}`);
-          sortingMap[`${bookId}.${endChapterNumber}.${i}`] = sortCounter;
-        }
-        const verses = sqliteDb.prepare(`SELECT * FROM verses WHERE id IN (${[...startRangeVerses, ...endRangeVerses].map((v) => "?").join(",")})`).all(...[...startRangeVerses, ...endRangeVerses]);
-        return verses.sort((a, b) => sortingMap[a.id] - sortingMap[b.id]);
-      }
 
-      return [];
+     const startVerses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE chapterId = ? AND chapterNumber = ? AND verseNumber >= ?`
+        )
+        .all(`${bookId}.${startChapterNumber}`, startChapterNumber, startVerseNumber);
 
+      const endVerses = sqliteDb
+        .prepare(
+          `SELECT * FROM verses WHERE chapterId LIKE ? AND chapterNumber = ? AND verseNumber <= ?`
+        )
+        .all(`${bookId}.${endChapterNumber}`, endChapterNumber, endVerseNumber);
+
+      if (!startVerses || !endVerses) {
+        return [];
+      }
+      const result = [
+        ...startVerses.sort((a, b) => a.verseNumber - b.verseNumber),
+        ...endVerses.sort((a, b) => a.verseNumber - b.verseNumber),
+      ];
+      return result
     } catch (err) {
       console.log(err);
       return [];
@@ -180,5 +156,24 @@
       console.log(err);
       throw err;
     }
+  };
+
+  data.addChapterNumberAndVerseNumber = async () => {
+    try {
+      const verses = sqliteDb.prepare("SELECT * FROM verses").all();
+
+      for (const verse of verses) {
+        //spa-RVR1960:1Cor.11.26
+        const [_, chapterNumber, verseNumber] = verse.id
+          .split(":")[1]
+          .split(".");
+        //update the chapterNumber and verseNumber
+        sqliteDb
+          .prepare(
+            `UPDATE verses SET chapterNumber = ?, verseNumber = ? WHERE id = ?`
+          )
+          .run(chapterNumber, verseNumber, verse.id);
+      }
+    } catch (err) {}
   };
 })(module.exports);

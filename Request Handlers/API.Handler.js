@@ -103,7 +103,21 @@ const DB = require("../data");
     }
   }; 
 
- 
+
+ ApiRequestHandler.addChapterNumberAndVerseNumber = async (
+    nodeRequest,
+    nodeResponse
+  ) => {
+    try {
+      const response = await DB.addChapterNumberAndVerseNumber(
+        nodeRequest.params.bookId,
+        nodeRequest.params.verseRange
+      );
+      sendResponse(nodeResponse, response);
+    } catch (error) {
+      nodeResponse.send(500, error);
+    }
+  }
 
   function sendResponse(nodeResponse, content) {
     nodeResponse.set("Content-Type", "application/json");
