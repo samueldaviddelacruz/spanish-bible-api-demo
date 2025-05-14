@@ -4,17 +4,17 @@ on:
     branches:
     - master
 env:
-  NODE_VERSION: '16.x'    # set this to the node version to use 
+  NODE_VERSION: '22.x'    # set this to the node version to use 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
     
     - name: Checkout source code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Use Node.js ${{ env.NODE_VERSION }} To run Tests
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ env.NODE_VERSION }}
     - run: npm install
@@ -23,13 +23,12 @@ jobs:
       run: zip -r ${{github.SHA}}.zip . -x '*.git*' -x '*node_modules*'
       
     - name: Deploy to EB
-      uses: einaregilsson/beanstalk-deploy@v16
+      uses: einaregilsson/beanstalk-deploy@v22
       with:
         aws_access_key: ${{ secrets.AWS_CI_CD_ACCESS_KEY_ID }}
         aws_secret_key: ${{ secrets.AWS_CI_CD_SECRET_ACCESS_KEY }}
-        application_name: Bible-API-24-7-2023
-        environment_name: Bible-API-24-7-2023-env
+        application_name: Bible-API-14-5-2025
+        environment_name: Bible-API-14-5-2025-env
         version_label: Version_${{github.SHA}}
-        version_description: ${{github.SHA}}
         region: us-west-2
         deployment_package: ${{github.SHA}}.zip
