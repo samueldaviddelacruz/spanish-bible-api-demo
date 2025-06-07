@@ -55,6 +55,12 @@ type VerseRequest struct {
 	ChapterNumber int `path:"chapterNumber" required:"true"`
 	VerseNumber   int `path:"verseNumber" required:"true"`
 }
+type ChapterToChapterVersesRequest struct {
+	BookRequest
+	StartChapterNumber int `path:"startChapterNumber" required:"true"`
+	EndChapterNumber   int `path:"endChapterNumber" required:"true"`
+	EndVerseNumber     int `path:"endVerseNumber" required:"true"`
+}
 
 func Filter[T any](slice []T, f func(T) bool) []T {
 	for i, value := range slice {
@@ -144,7 +150,43 @@ func main() {
 			Body: book,
 		}, nil
 	})
+	huma.Register(api, huma.Operation{
+		Method:      http.MethodGet,
+		Path:        "/api/books/{bookId}/verses/{startChapterNumber}-{endChapterNumber}:{endVerseNumber}",
+		Summary:     "Get verses from chapter to chaper verse",
+		Description: "Get verses from chapter to chaper and verse",
+		Tags:        []string{"Verses"},
+	}, func(ctx context.Context, input *ChapterToChapterVersesRequest) (*ListResponse[Verse], error) {
+		startChapterVerses := []Verse{}
+		endChapterVerses := []Verse{}
+		results := []Verse{}
+		err := db.Select(&startChapterVerses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ?`, fmt.Sprintf("%s.%d", input.BookId, input.StartChapterNumber))
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
+			}
+			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.StartChapterNumber))
+		}
+		slices.SortFunc(startChapterVerses, func(c1 Verse, c2 Verse) int {
+			return c1.VerseNumber - c2.VerseNumber
+		})
 
+		err = db.Select(&endChapterVerses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ? AND verseNumber <= ?`, fmt.Sprintf("%s.%d", input.BookId, input.EndChapterNumber), input.EndVerseNumber)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
+			}
+			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.EndChapterNumber))
+		}
+		slices.SortFunc(endChapterVerses, func(c1 Verse, c2 Verse) int {
+			return c1.VerseNumber - c2.VerseNumber
+		})
+		results = append(results, startChapterVerses...)
+		results = append(results, endChapterVerses...)
+		return &ListResponse[Verse]{
+			Body: results,
+		}, nil
+	})
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
 		Path:        "/api/books/{bookId}/verses/{chapterNumber}",
