@@ -176,14 +176,14 @@ Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 
 Esta API está centrada en la versión **Reina-Valera 1960**.  
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
-	/*
-		config.Servers = []*huma.Server{
-			{
-				URL:         "http://localhost:8888",
-				Description: "url description",
-			},
-		}
-	*/
+
+	config.Servers = []*huma.Server{
+		{
+			URL:         "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev",
+			Description: "url description",
+		},
+	}
+
 	api := humachi.New(router, config)
 
 	huma.Register(api, huma.Operation{
