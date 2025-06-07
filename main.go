@@ -200,7 +200,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 			linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
 			c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
 			c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
-				return linkTransformer.Transform(ctx, status, v, fmt.Sprintf("%s/%s", hostUrl, hostPath))
+				return linkTransformer.Transform(ctx, status, v, hostUrl)
 			})
 			return c
 		},
