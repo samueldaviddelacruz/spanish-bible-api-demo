@@ -178,7 +178,7 @@ Esta API está centrada en la versión **Reina-Valera 1960**.
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
 
-	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev/"
+	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev"
 	servers := []*huma.Server{
 		{
 			URL:         hostUrl,
