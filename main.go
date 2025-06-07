@@ -178,23 +178,29 @@ Esta API está centrada en la versión **Reina-Valera 1960**.
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
 
-	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev"
+	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com"
+	hostPath := "/dev"
 	servers := []*huma.Server{
 		{
-			URL:         hostUrl,
-			Description: "url description",
+			URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
+			Description: "API URL",
 		},
 	}
 
 	config.Servers = servers
-
+	config.OpenAPI.Servers = []*huma.Server{
+		{
+			URL:         hostUrl,
+			Description: "API URL",
+		},
+	}
 	config.CreateHooks = []func(huma.Config) huma.Config{
 		func(c huma.Config) huma.Config {
 			schemaPrefix := "#/components/schemas/"
 			linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
 			c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
 			c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
-				return linkTransformer.Transform(ctx, status, v, hostUrl)
+				return linkTransformer.Transform(ctx, status, v, fmt.Sprintf("%s/%s", hostUrl, hostPath))
 			})
 			return c
 		},
