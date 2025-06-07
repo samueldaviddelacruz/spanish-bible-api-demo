@@ -190,7 +190,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 	config.Servers = servers
 	config.OpenAPI.Servers = []*huma.Server{
 		{
-			URL:         hostUrl,
+			URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
 			Description: "API URL",
 		},
 	}
