@@ -179,7 +179,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
 
 	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com"
-	hostPath := "/dev"
+	hostPath := "dev"
 	servers := []*huma.Server{
 		{
 			URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
