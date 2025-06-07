@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -132,9 +134,58 @@ func main() {
 		log.Fatal("error opening DB")
 	}
 	defer db.Close()
+	port := 8888
+	if os.Getenv("PORT") != "" {
+		port, err = strconv.Atoi(os.Getenv("PORT"))
+		if err != nil {
+			log.Fatal("Error while parsing port")
+		}
+	}
 
 	router := chi.NewMux()
-	api := humachi.New(router, huma.DefaultConfig("RV 1960 API", "1.0.0"))
+	config := huma.DefaultConfig("RV 1960 API", "1.0.0")
+	config.Info.Contact = &huma.Contact{
+		Name:  "Samuel De La Cruz",
+		Email: "delacruzportorrealsamueldavid@gmail.com",
+	}
+	config.Info.Description = `## 📘 Descripción de la API
+
+Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 1960 (RV1960)**. Permite consultar libros, capítulos y versículos específicos de la Biblia, facilitando la navegación por las Escrituras de manera programática. Está pensada para ser utilizada por aplicaciones web, móviles o sistemas que necesiten integrar o mostrar contenido bíblico de forma precisa y eficiente.
+
+---
+
+### ✨ Funcionalidades principales
+
+- Obtener la lista completa de libros bíblicos (Antiguo y Nuevo Testamento).
+- Consultar un libro específico por su ID.
+- Listar todos los capítulos o versículos de un libro o capítulo determinado.
+- Buscar un rango de versículos entre capítulos o dentro de un capítulo.
+- Acceso a versículos individuales mediante referencias precisas.
+
+---
+
+### 🏷️ Formato y estructura
+
+- Todos los recursos están organizados por identificadores únicos consistentes (libro.capítulo.versículo).
+- Las respuestas están optimizadas para lecturas rápidas y ordenadas por capítulo y versículo.
+
+---
+
+### 🔒 Notas
+
+Esta API está centrada en la versión **Reina-Valera 1960**.  
+No contiene comentarios, notas teológicas ni versiones alternativas del texto.
+`
+	/*
+		config.Servers = []*huma.Server{
+			{
+				URL:         "http://localhost:8888",
+				Description: "url description",
+			},
+		}
+	*/
+	api := humachi.New(router, config)
+
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
 		Path:        "/api/books",
@@ -333,6 +384,6 @@ func main() {
 	})
 
 	// Start the server!
-	fmt.Println("Starting server on port 8888 ")
-	http.ListenAndServe("127.0.0.1:8888", router)
+	fmt.Printf("Starting server on port %d ", port)
+	http.ListenAndServe(fmt.Sprintf(":%d", port), router)
 }

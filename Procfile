@@ -1,1 +1,1 @@
-web: node server.js
+web: ./spanish-bible-api-demo
