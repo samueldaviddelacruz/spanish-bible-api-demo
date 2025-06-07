@@ -143,6 +143,7 @@ func main() {
 	}
 
 	router := chi.NewMux()
+
 	config := huma.DefaultConfig("RV 1960 API", "1.0.0")
 	config.Info.Contact = &huma.Contact{
 		Name:  "Samuel De La Cruz",
@@ -184,7 +185,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 	}
 	config.Servers = servers
 	config.OpenAPI.Servers = servers
-
+	config.CreateHooks = []func(huma.Config) huma.Config{}
 	api := humachi.New(router, config)
 
 	huma.Register(api, huma.Operation{
@@ -198,9 +199,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		chapters := []Chapter{}
 		err := db.Select(&books, `SELECT id, name, "order", testament FROM books ORDER BY "order"`)
 		if err != nil {
-
 			return nil, fmt.Errorf("error while getting books from DB: %v", err)
-
 		}
 		err = db.Select(&chapters, "SELECT * FROM chapters")
 		if err != nil {
