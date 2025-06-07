@@ -176,13 +176,13 @@ Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 
 Esta API está centrada en la versión **Reina-Valera 1960**.  
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
-
-	config.Servers = []*huma.Server{
+	servers := []*huma.Server{
 		{
 			URL:         "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev",
 			Description: "url description",
 		},
 	}
+	config.Servers = servers
 
 	api := humachi.New(router, config)
 
@@ -222,6 +222,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
+		Servers:     servers,
 		Path:        "/api/books/{bookId}",
 		Summary:     "Obtener un libro específico (RV1960)",
 		Description: "Devuelve los detalles de un libro de la Biblia en la versión Reina Valera 1960 a partir de su ID, incluyendo los capítulos que lo componen.",
