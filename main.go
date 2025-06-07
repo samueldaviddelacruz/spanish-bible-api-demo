@@ -177,15 +177,29 @@ Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 
 Esta API está centrada en la versión **Reina-Valera 1960**.  
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
+
+	hostUrl := "ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev/api/"
 	servers := []*huma.Server{
 		{
-			URL:         "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev",
+			URL:         hostUrl,
 			Description: "url description",
 		},
 	}
+
 	config.Servers = servers
 	config.OpenAPI.Servers = servers
-	config.CreateHooks = []func(huma.Config) huma.Config{}
+
+	config.CreateHooks = []func(huma.Config) huma.Config{
+		func(c huma.Config) huma.Config {
+			schemaPrefix := "#/components/schemas/"
+			linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
+			c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
+			c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
+				return linkTransformer.Transform(ctx, status, v, hostUrl)
+			})
+			return c
+		},
+	}
 	api := humachi.New(router, config)
 
 	huma.Register(api, huma.Operation{
