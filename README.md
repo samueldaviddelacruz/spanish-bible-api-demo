@@ -11,4 +11,4 @@ npm start
 it will be running on localhost:5000
 
 ## Hosted API Docs
-* You can try it out here => [Documentation](https://samueldaviddelacruz.github.io/spanish-bible-api/) 
+* You can try it out here => [Documentation](https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev/docs) 
