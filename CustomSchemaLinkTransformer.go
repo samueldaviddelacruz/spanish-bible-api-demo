@@ -204,7 +204,12 @@ func (t *CustomSchemaLinkTransformer) Transform(ctx huma.Context, status string,
 
 	host := ctx.Host()
 	if hostUrl != "" {
-		host = hostUrl
+		if strings.Contains(hostUrl, "http://") {
+			host = hostUrl[7:]
+		}
+		if strings.Contains(hostUrl, "https://") {
+			host = hostUrl[8:]
+		}
 	}
 	ctx.AppendHeader("Link", info.header)
 
