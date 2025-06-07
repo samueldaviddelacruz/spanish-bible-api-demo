@@ -48,7 +48,12 @@ type BookRequest struct {
 }
 type VersesByChapterIdRequest struct {
 	BookRequest
-	ChapterNumber string `path:"chapterNumber" required:"true"`
+	ChapterNumber int `path:"chapterNumber" required:"true"`
+}
+type VerseRequest struct {
+	BookRequest
+	ChapterNumber int `path:"chapterNumber" required:"true"`
+	VerseNumber   int `path:"verseNumber" required:"true"`
 }
 
 func Filter[T any](slice []T, f func(T) bool) []T {
@@ -148,18 +153,39 @@ func main() {
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *VersesByChapterIdRequest) (*ListResponse[Verse], error) {
 		verses := []Verse{}
-		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ?`, fmt.Sprintf("%s.%s", input.BookId, input.ChapterNumber))
+		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ?`, fmt.Sprintf("%s.%d", input.BookId, input.ChapterNumber))
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
 			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%s", input.BookId, input.ChapterNumber))
+			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.ChapterNumber))
 		}
 		slices.SortFunc(verses, func(c1 Verse, c2 Verse) int {
 			return c1.VerseNumber - c2.VerseNumber
 		})
 		return &ListResponse[Verse]{
 			Body: verses,
+		}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		Method:      http.MethodGet,
+		Path:        "/api/books/{bookId}/verses/{chapterNumber}:{verseNumber}",
+		Summary:     "Get verse by chapter and verse",
+		Description: "Get verse by book chapter number and verse number",
+		Tags:        []string{"Verses"},
+	}, func(ctx context.Context, input *VerseRequest) (*SingleResponse[Verse], error) {
+		verse := Verse{}
+		verseId := fmt.Sprintf("%s.%d.%d", input.BookId, input.ChapterNumber, input.VerseNumber)
+		err := db.Get(&verse, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE id = ?`, verseId)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return nil, fmt.Errorf("error while getting verse from DB: %v", err)
+			}
+			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d", input.BookId, input.ChapterNumber))
+		}
+		return &SingleResponse[Verse]{
+			Body: verse,
 		}, nil
 	})
 
