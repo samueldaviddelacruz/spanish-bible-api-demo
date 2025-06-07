@@ -183,6 +183,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		},
 	}
 	config.Servers = servers
+	config.OpenAPI.Servers = servers
 
 	api := humachi.New(router, config)
 
@@ -221,8 +222,8 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 	})
 
 	huma.Register(api, huma.Operation{
-		Method:      http.MethodGet,
-		Servers:     servers,
+		Method: http.MethodGet,
+
 		Path:        "/api/books/{bookId}",
 		Summary:     "Obtener un libro específico (RV1960)",
 		Description: "Devuelve los detalles de un libro de la Biblia en la versión Reina Valera 1960 a partir de su ID, incluyendo los capítulos que lo componen.",
