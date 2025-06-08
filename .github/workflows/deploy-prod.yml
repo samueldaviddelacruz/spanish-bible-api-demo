@@ -20,7 +20,7 @@ jobs:
     - run: GOOS=linux GOARCH=arm64 go build .
 
     - name: Generate deployment package
-      run: zip -r ${{github.SHA}}.zip . -x '*.git*' -x '*node_modules*'
+      run: zip -r ${{github.SHA}}.zip . -x '*.git*'
       
     - name: Deploy to EB
       uses: einaregilsson/beanstalk-deploy@v22
