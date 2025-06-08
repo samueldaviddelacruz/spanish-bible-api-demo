@@ -295,34 +295,21 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Description: "Devuelve los versículos que se encuentran entre un capítulo y versículo inicial y un capítulo y versículo final, respetando ambos límites.",
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *VerseRangeRequest) (*ListResponse[Verse], error) {
-		startChapterVerses := []Verse{}
-		endChapterVerses := []Verse{}
 		results := []Verse{}
-		err := db.Select(&startChapterVerses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber 
-												FROM verses 
-												WHERE chapterId = ? AND verseNumber >= ? ORDER BY verseNumber`,
-			fmt.Sprintf("%s.%d", input.BookId, input.StartChapterNumber), input.StartVerseNumber)
+		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.StartChapterNumber))
 		}
-
-		err = db.Select(&endChapterVerses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber 
-											FROM verses 
-											WHERE chapterId = ? AND verseNumber <= ? ORDER BY verseNumber`,
-			fmt.Sprintf("%s.%d", input.BookId, input.EndChapterNumber), input.EndVerseNumber)
-
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.EndChapterNumber))
-		}
-
-		results = append(results, startChapterVerses...)
-		results = append(results, endChapterVerses...)
+		startVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
+			return verse.ChapterNumber == int(input.StartChapterNumber) && verse.VerseNumber == int(input.StartVerseNumber)
+		})
+		lastVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
+			return verse.ChapterNumber == int(input.EndChapterNumber) && verse.VerseNumber == int(input.EndVerseNumber)
+		})
+		results = results[startVerseIndex : lastVerseIndex+1]
 		return &ListResponse[Verse]{
 			Body: results,
 		}, nil
