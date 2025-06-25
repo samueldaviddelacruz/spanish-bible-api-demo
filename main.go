@@ -380,7 +380,59 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 			Body: verse,
 		}, nil
 	})
+	/*
+		huma.Register(api, huma.Operation{
+			Method:      http.MethodGet,
+			Path:        "/api/books/verses/fix",
+			Summary:     "Obtener un versículo específico",
+			Description: "Devuelve un versículo específico de un libro a partir del número de capítulo y el número de versículo.",
+			Tags:        []string{"Verses"},
+		}, func(ctx context.Context, input *struct{}) (*ListResponse[struct {
+			ID            string `json:"id"`
+			ChapterId     string `json:"chapterId" db:"chapterId"`
+			CleanText     string `json:"cleanText" db:"cleanText"`
+			Reference     string `json:"reference" db:"reference"`
+			Text          string `json:"text" db:"text"`
+			ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
+			VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
+		}], error) {
+			verses := []struct {
+				ID            string `json:"id"`
+				ChapterId     string `json:"chapterId" db:"chapterId"`
+				CleanText     string `json:"cleanText" db:"cleanText"`
+				Reference     string `json:"reference" db:"reference"`
+				Text          string `json:"text" db:"text"`
+				ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
+				VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
+			}{}
 
+			err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses`)
+			if err != nil {
+				if err != sql.ErrNoRows {
+					return nil, fmt.Errorf("error while getting verses from DB: %v", err)
+				}
+				return nil, huma.Error404NotFound(fmt.Sprint("verses not found"))
+			}
+			for _, verse := range verses {
+				verseInfo := strings.Split(verse.ID, ".")
+				verseNumber := verseInfo[len(verseInfo)-1]
+				chapterNumber := verseInfo[len(verseInfo)-2]
+				db.MustExec("UPDATE verses SET verseNumber = ?, chapterNumber = ? WHERE id = ?", verseNumber, chapterNumber, verse.ID)
+			}
+
+			return &ListResponse[struct {
+				ID            string `json:"id"`
+				ChapterId     string `json:"chapterId" db:"chapterId"`
+				CleanText     string `json:"cleanText" db:"cleanText"`
+				Reference     string `json:"reference" db:"reference"`
+				Text          string `json:"text" db:"text"`
+				ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
+				VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
+			}]{
+				Body: verses,
+			}, nil
+		})
+	*/
 	// Start the server!
 	fmt.Printf("Starting server on port %d ", port)
 	http.ListenAndServe(fmt.Sprintf(":%d", port), router)
