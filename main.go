@@ -387,7 +387,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
-		Path:        "/api/search",
+		Path:        "/api/verses/search",
 		Summary:     "Buscar dentro de los versiculos de la biblia",
 		Description: "Devuelve todos los versículos que contengan el texto especificado.",
 		Tags:        []string{"Verses"},
