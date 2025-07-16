@@ -10,11 +10,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 	_ "modernc.org/sqlite"
 )
 
@@ -130,6 +134,23 @@ func Filter[T any](slice []T, f func(T) bool) []T {
 		}
 	}
 	return slice
+}
+
+func removeAccents(s string) string {
+	// Create a Transformer chain:
+	// 1. NFD (Normalization Form D): Decomposes characters into base characters and diacritics.
+	// 2. runes.Remove(runes.In(unicode.Mn)): Removes all nonspacing marks (Mn category in Unicode).
+	// 3. NFC (Normalization Form C): Recomposes characters where possible (optional, but good practice).
+	t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+
+	// Apply the transformation to the string.
+	output, _, err := transform.String(t, s)
+	if err != nil {
+		// Handle potential errors, e.g., print or return an empty string
+		fmt.Printf("Error transforming string: %v\n", err)
+		return s // Or handle error as appropriate for your application
+	}
+	return output
 }
 func main() {
 	// Create a new router & API
@@ -393,7 +414,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *SearchRequest) (*ListResponse[Verse], error) {
 		verses := []Verse{}
-		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanText like ?`, "%"+input.Query+"%")
+		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ?`, "%"+removeAccents(input.Query)+"%")
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
@@ -436,13 +457,10 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 				if err != sql.ErrNoRows {
 					return nil, fmt.Errorf("error while getting verses from DB: %v", err)
 				}
-				return nil, huma.Error404NotFound(fmt.Sprint("verses not found"))
+				return nil, huma.Error404NotFound("verses not found")
 			}
 			for _, verse := range verses {
-				verseInfo := strings.Split(verse.ID, ".")
-				verseNumber := verseInfo[len(verseInfo)-1]
-				chapterNumber := verseInfo[len(verseInfo)-2]
-				db.MustExec("UPDATE verses SET verseNumber = ?, chapterNumber = ? WHERE id = ?", verseNumber, chapterNumber, verse.ID)
+				db.MustExec("UPDATE verses SET cleanTextAscii = ? WHERE id = ?", removeAccents(verse.CleanText), verse.ID)
 			}
 
 			return &ListResponse[struct {
