@@ -60,6 +60,10 @@ type VerseRequest struct {
 	VerseNumber   uint `path:"verseNumber" required:"true" doc:"Número del versículo a obtener"`
 }
 
+type SearchRequest struct {
+	Query string `query:"q" required:"true" doc:"texto o termino a buscar"`
+}
+
 type ChapterToChapterVersesRequest struct {
 	BookRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial del rango"`
@@ -378,6 +382,27 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		}
 		return &SingleResponse[Verse]{
 			Body: verse,
+		}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		Method:      http.MethodGet,
+		Path:        "/api/search",
+		Summary:     "Buscar dentro de los versiculos de la biblia",
+		Description: "Devuelve todos los versículos que contengan el texto especificado.",
+		Tags:        []string{"Verses"},
+	}, func(ctx context.Context, input *SearchRequest) (*ListResponse[Verse], error) {
+		verses := []Verse{}
+		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanText like ?`, "%"+input.Query+"%")
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
+			}
+			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found for query: %s", input.Query))
+		}
+
+		return &ListResponse[Verse]{
+			Body: verses,
 		}, nil
 	})
 	/*
