@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"github.com/joho/godotenv"
 	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
@@ -159,6 +160,10 @@ func main() {
 		log.Fatal("error opening DB")
 	}
 	defer db.Close()
+	err = godotenv.Load()
+	if err != nil {
+		log.Println("No .env file found")
+	}
 	port := 8888
 	if os.Getenv("PORT") != "" {
 		port, err = strconv.Atoi(os.Getenv("PORT"))
@@ -202,33 +207,36 @@ Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 
 Esta API está centrada en la versión **Reina-Valera 1960**.  
 No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 `
+	env := os.Getenv("GO_ENV")
 
-	hostUrl := "https://ajphchgh0i.execute-api.us-west-2.amazonaws.com"
-	hostPath := "dev"
-	servers := []*huma.Server{
-		{
-			URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
-			Description: "API URL",
-		},
-	}
+	if env == "PROD" || env == "PRODUCTION" {
+		hostUrl := os.Getenv("HOST_URL")
+		hostPath := "dev"
+		servers := []*huma.Server{
+			{
+				URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
+				Description: "API URL",
+			},
+		}
 
-	config.Servers = servers
-	config.OpenAPI.Servers = []*huma.Server{
-		{
-			URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
-			Description: "API URL",
-		},
-	}
-	config.CreateHooks = []func(huma.Config) huma.Config{
-		func(c huma.Config) huma.Config {
-			schemaPrefix := "#/components/schemas/"
-			linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
-			c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
-			c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
-				return linkTransformer.Transform(ctx, status, v, hostUrl)
-			})
-			return c
-		},
+		config.Servers = servers
+		config.OpenAPI.Servers = []*huma.Server{
+			{
+				URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
+				Description: "API URL",
+			},
+		}
+		config.CreateHooks = []func(huma.Config) huma.Config{
+			func(c huma.Config) huma.Config {
+				schemaPrefix := "#/components/schemas/"
+				linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
+				c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
+				c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
+					return linkTransformer.Transform(ctx, status, v, hostUrl)
+				})
+				return c
+			},
+		}
 	}
 	api := humachi.New(router, config)
 
