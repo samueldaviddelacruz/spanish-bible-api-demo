@@ -50,8 +50,8 @@ Este proyecto es una API de la Biblia construida con [Go](https://golang.org/) u
 1. **Clonar el repositorio:**
 
    ```bash
-   git clone https://github.com/tu-usuario/bible-api.git
-   cd bible-api
+   git clone https://github.com/samueldaviddelacruz/spanish-bible-api-demo.git
+   cd spanish-bible-api-demo
    ```
 
 2. **Ejecutar la API:**
@@ -66,15 +66,7 @@ Este proyecto es una API de la Biblia construida con [Go](https://golang.org/) u
 
 ## 📚 Documentation/documentación
 
-### English
-
 - [Documentation](https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev/docs) 
-
----
-
-### Español
-
-- [documentación](https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev/docs) 
 
 ---
 
