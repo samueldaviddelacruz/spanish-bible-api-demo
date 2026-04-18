@@ -33,7 +33,7 @@ var bufPool = sync.Pool{
 }
 
 func deref(t reflect.Type) reflect.Type {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t
@@ -148,7 +148,7 @@ func (t *CustomSchemaLinkTransformer) OnAddOperation(oapi *huma.OpenAPI, op *hum
 
 			fieldIndexes := []int{}
 			fields := []reflect.StructField{
-				reflect.TypeOf(extra).Field(0),
+				reflect.TypeFor[schemaField]().Field(0),
 			}
 			for i := range typ.NumField() {
 				f := typ.Field(i)
