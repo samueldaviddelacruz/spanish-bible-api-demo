@@ -327,6 +327,64 @@ func TestChapterRange(t *testing.T) {
 	}
 }
 
+func TestPagination(t *testing.T) {
+	srv := newTestServer(t)
+
+	status, body := doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=2")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.3"})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=2&offset=2")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.2.2"})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&offset=1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.2"})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&offset=9")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=0")
+	if status != http.StatusOK {
+		t.Fatalf("limit=0: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.2"})
+
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1?limit=2&offset=1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
+
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/chapter/1/to/chapter/2?limit=2&offset=1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
+
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/1/to/2/verse/2?limit=2&offset=2")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
+
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/to/2/verse/2?limit=1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1"})
+}
+
 func TestSearch(t *testing.T) {
 	srv := newTestServer(t)
 

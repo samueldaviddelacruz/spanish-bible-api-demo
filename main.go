@@ -57,8 +57,14 @@ type BookRequest struct {
 	BookId string `path:"bookId" enum:"spa-RVR1960:Gen,spa-RVR1960:Exod,spa-RVR1960:Lev,spa-RVR1960:Num,spa-RVR1960:Deut,spa-RVR1960:Josh,spa-RVR1960:Judg,spa-RVR1960:Ruth,spa-RVR1960:1Sam,spa-RVR1960:2Sam,spa-RVR1960:1Kgs,spa-RVR1960:2Kgs,spa-RVR1960:1Chr,spa-RVR1960:2Chr,spa-RVR1960:Ezra,spa-RVR1960:Neh,spa-RVR1960:Esth,spa-RVR1960:Job,spa-RVR1960:Ps,spa-RVR1960:Prov,spa-RVR1960:Eccl,spa-RVR1960:Song,spa-RVR1960:Isa,spa-RVR1960:Jer,spa-RVR1960:Lam,spa-RVR1960:Ezek,spa-RVR1960:Dan,spa-RVR1960:Hos,spa-RVR1960:Joel,spa-RVR1960:Amos,spa-RVR1960:Obad,spa-RVR1960:Jonah,spa-RVR1960:Mic,spa-RVR1960:Nah,spa-RVR1960:Hab,spa-RVR1960:Zeph,spa-RVR1960:Hag,spa-RVR1960:Zech,spa-RVR1960:Mal,spa-RVR1960:Matt,spa-RVR1960:Mark,spa-RVR1960:Luke,spa-RVR1960:John,spa-RVR1960:Acts,spa-RVR1960:Rom,spa-RVR1960:1Cor,spa-RVR1960:2Cor,spa-RVR1960:Gal,spa-RVR1960:Eph,spa-RVR1960:Phil,spa-RVR1960:Col,spa-RVR1960:1Thess,spa-RVR1960:2Thess,spa-RVR1960:1Tim,spa-RVR1960:2Tim,spa-RVR1960:Titus,spa-RVR1960:Phlm,spa-RVR1960:Heb,spa-RVR1960:Jas,spa-RVR1960:1Pet,spa-RVR1960:2Pet,spa-RVR1960:1John,spa-RVR1960:2John,spa-RVR1960:3John,spa-RVR1960:Jude,spa-RVR1960:Rev" doc:"Identificador del libro bíblico (ej: 'spa-RVR1960:Gen')"`
 }
 
+type PaginationRequest struct {
+	Limit  uint `query:"limit" doc:"Número máximo de versículos a devolver (opcional, 0 u omitido = sin límite)"`
+	Offset uint `query:"offset" doc:"Cantidad de versículos a omitir (opcional)"`
+}
+
 type VersesByChapterIdRequest struct {
 	BookRequest
+	PaginationRequest
 	ChapterNumber uint `path:"chapterNumber" required:"true" doc:"Número del capítulo del cual obtener los versículos"`
 }
 
@@ -70,10 +76,12 @@ type VerseRequest struct {
 
 type SearchRequest struct {
 	Query string `query:"q" required:"true" doc:"texto o termino a buscar"`
+	PaginationRequest
 }
 
 type ChapterToChapterVersesRequest struct {
 	BookRequest
+	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial del rango"`
 	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final del rango"`
 	EndVerseNumber     uint `path:"endVerseNumber" required:"true" doc:"Último versículo a incluir del capítulo final"`
@@ -81,6 +89,7 @@ type ChapterToChapterVersesRequest struct {
 
 type VerseRangeRequest struct {
 	BookRequest
+	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
 	StartVerseNumber   uint `path:"startVerseNumber" required:"true" doc:"Versículo inicial dentro del capítulo inicial"`
 	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final"`
@@ -89,6 +98,7 @@ type VerseRangeRequest struct {
 
 type ChapterRangeRequest struct {
 	BookRequest
+	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
 	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final"`
 }
@@ -160,6 +170,30 @@ func removeAccents(s string) string {
 func dbError(op string, err error) error {
 	log.Printf("%s: %v", op, err)
 	return huma.Error500InternalServerError("internal server error")
+}
+
+func paginateSQL(query string, args []any, p PaginationRequest) (string, []any) {
+	if p.Limit == 0 {
+		if p.Offset == 0 {
+			return query, args
+		}
+		return query + " LIMIT -1 OFFSET ?", append(args, p.Offset)
+	}
+	return query + " LIMIT ? OFFSET ?", append(args, p.Limit, p.Offset)
+}
+
+func paginate[T any](items []T, p PaginationRequest) []T {
+	if p.Limit == 0 && p.Offset == 0 {
+		return items
+	}
+	if p.Offset >= uint(len(items)) {
+		return []T{}
+	}
+	items = items[p.Offset:]
+	if p.Limit != 0 && uint(len(items)) > p.Limit {
+		items = items[:p.Limit]
+	}
+	return items
 }
 func main() {
 	// Create a new router & API
@@ -364,6 +398,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.EndChapterNumber, input.EndVerseNumber))
 		}
 		results = results[:lastVerseIndex+1]
+		results = paginate(results, input.PaginationRequest)
 		return &ListResponse[Verse]{
 			Body: results,
 		}, nil
@@ -396,6 +431,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 			return nil, huma.Error422UnprocessableEntity("endVerseNumber cannot be less than startVerseNumber")
 		}
 		results = results[startVerseIndex : lastVerseIndex+1]
+		results = paginate(results, input.PaginationRequest)
 		return &ListResponse[Verse]{
 			Body: results,
 		}, nil
@@ -409,10 +445,9 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *ChapterRangeRequest) (*ListResponse[Verse], error) {
 		results := []Verse{}
-		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber 
-									FROM verses WHERE chapterId LIKE ? 
-									AND chapterNumber BETWEEN ? AND ? 
-									ORDER BY chapterNumber,verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
+		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber BETWEEN ? AND ? ORDER BY chapterNumber, verseNumber`
+		query, args := paginateSQL(query, []any{"%" + input.BookId + "%", input.StartChapterNumber, input.EndChapterNumber}, input.PaginationRequest)
+		err := db.Select(&results, query, args...)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
 		}
@@ -429,7 +464,9 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *VersesByChapterIdRequest) (*ListResponse[Verse], error) {
 		verses := []Verse{}
-		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ? ORDER BY verseNumber`, fmt.Sprintf("%s.%d", input.BookId, input.ChapterNumber))
+		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ? ORDER BY verseNumber`
+		query, args := paginateSQL(query, []any{fmt.Sprintf("%s.%d", input.BookId, input.ChapterNumber)}, input.PaginationRequest)
+		err := db.Select(&verses, query, args...)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
 		}
@@ -468,7 +505,9 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *SearchRequest) (*ListResponse[Verse], error) {
 		verses := []Verse{}
-		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ?`, "%"+removeAccents(input.Query)+"%")
+		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ?`
+		query, args := paginateSQL(query, []any{"%" + removeAccents(input.Query) + "%"}, input.PaginationRequest)
+		err := db.Select(&verses, query, args...)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
 		}
