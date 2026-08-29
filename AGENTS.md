@@ -21,6 +21,7 @@ Single-package Go API (Huma v2 + chi + sqlx) serving Spanish RV1960 Bible data f
 - `main_test.go` seeds a throwaway SQLite DB in `t.TempDir()` and exercises endpoints through `newRouter(db)` (extracted from `main`) via `httptest` — tests never touch the committed `Bible.db`.
 - Router construction reads `GO_ENV`; tests pin it with `t.Setenv("GO_ENV", "LOCAL")` so the PROD-only transformer path stays off.
 - `TestProdSchemaLink` covers the PROD path: `GO_ENV=PROD` + `HOST_URL` + `X-Forwarded-Host` → asserts the `$schema` URL in the response body.
+- `TestProdOpenAPIServers` covers the `GO_ENV=PRODUCTION` arm: spec `servers` entries come from `HOST_URL`, and are absent in local dev. PROD refuses to start without `HOST_URL` (`log.Fatal`).
 
 ## Environment
 - `GO_ENV=LOCAL` for dev (see `.env.example`; loaded via godotenv). `GO_ENV=PROD|PRODUCTION` sets the OpenAPI `servers` entries from `HOST_URL` (the API Gateway URL) and requires it — that code path is skipped entirely in local dev.

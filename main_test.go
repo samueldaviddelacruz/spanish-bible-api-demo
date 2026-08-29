@@ -434,6 +434,52 @@ func TestProdSchemaLink(t *testing.T) {
 	}
 }
 
+func TestProdOpenAPIServers(t *testing.T) {
+	t.Run("production sets servers from HOST_URL", func(t *testing.T) {
+		t.Setenv("GO_ENV", "PRODUCTION")
+		t.Setenv("HOST_URL", "https://gateway.example.com")
+		srv := httptest.NewServer(newRouter(setupTestDB(t)))
+		t.Cleanup(srv.Close)
+		resp, err := http.Get(srv.URL + "/openapi.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec struct {
+			Servers []struct {
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"servers"`
+		}
+		mustUnmarshal(t, body, &spec)
+		if len(spec.Servers) != 1 || spec.Servers[0].URL != "https://gateway.example.com/dev" {
+			t.Fatalf("servers = %+v, want one entry with url https://gateway.example.com/dev", spec.Servers)
+		}
+	})
+
+	t.Run("local dev omits servers", func(t *testing.T) {
+		srv := newTestServer(t)
+		resp, err := http.Get(srv.URL + "/openapi.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec map[string]any
+		mustUnmarshal(t, body, &spec)
+		if servers, _ := spec["servers"].([]any); len(servers) != 0 {
+			t.Fatalf("servers = %v, want none in local dev", servers)
+		}
+	})
+}
+
 func TestSearch(t *testing.T) {
 	srv := newTestServer(t)
 

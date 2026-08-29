@@ -308,6 +308,9 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 
 	if env == "PROD" || env == "PRODUCTION" {
 		hostUrl := os.Getenv("HOST_URL")
+		if hostUrl == "" {
+			log.Fatal("HOST_URL must be set when GO_ENV is PROD")
+		}
 		hostPath := "dev"
 		serverUrl := fmt.Sprintf("%s/%s", hostUrl, hostPath)
 		config.Servers = []*huma.Server{
