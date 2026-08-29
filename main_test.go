@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -390,6 +391,47 @@ func TestPagination(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1"})
+}
+
+func TestProdSchemaLink(t *testing.T) {
+	t.Setenv("GO_ENV", "PROD")
+	t.Setenv("HOST_URL", "https://gateway.example.com")
+	srv := httptest.NewServer(newRouter(setupTestDB(t)))
+	t.Cleanup(srv.Close)
+	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/1"
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-Host", "gateway.example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var payload map[string]any
+	mustUnmarshal(t, body, &payload)
+	if got, _ := payload["$schema"].(string); got != "https://gateway.example.com/dev/schemas/Verse.json" {
+		t.Fatalf("$schema = %q, want https://gateway.example.com/dev/schemas/Verse.json", got)
+	}
+
+	status, body := doGet(t, url)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	var fallback map[string]any
+	mustUnmarshal(t, body, &fallback)
+	if got, _ := fallback["$schema"].(string); !strings.Contains(got, "/dev/schemas/Verse.json") {
+		t.Fatalf("$schema without X-Forwarded-Host = %q, want it to contain /dev/schemas/Verse.json", got)
+	}
 }
 
 func TestSearch(t *testing.T) {

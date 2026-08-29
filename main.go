@@ -309,29 +309,17 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 	if env == "PROD" || env == "PRODUCTION" {
 		hostUrl := os.Getenv("HOST_URL")
 		hostPath := "dev"
-		servers := []*huma.Server{
+		serverUrl := fmt.Sprintf("%s/%s", hostUrl, hostPath)
+		config.Servers = []*huma.Server{
 			{
-				URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
+				URL:         serverUrl,
 				Description: "API URL",
 			},
 		}
-
-		config.Servers = servers
 		config.OpenAPI.Servers = []*huma.Server{
 			{
-				URL:         fmt.Sprintf("%s/%s", hostUrl, hostPath),
+				URL:         serverUrl,
 				Description: "API URL",
-			},
-		}
-		config.CreateHooks = []func(huma.Config) huma.Config{
-			func(c huma.Config) huma.Config {
-				schemaPrefix := "#/components/schemas/"
-				linkTransformer := NewCustomSchemaLinkTransformer(schemaPrefix, c.SchemasPath)
-				c.OnAddOperation = append(c.OnAddOperation, linkTransformer.OnAddOperation)
-				c.Transformers = append(c.Transformers, func(ctx huma.Context, status string, v any) (any, error) {
-					return linkTransformer.Transform(ctx, status, v, hostUrl)
-				})
-				return c
 			},
 		}
 	}

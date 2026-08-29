@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Single-package Go API (Huma v2 + chi + sqlx) serving Spanish RV1960 Bible data from a SQLite file. Everything lives in `main.go` + `CustomSchemaLinkTransformer.go`; no sub-packages, no frontend.
+Single-package Go API (Huma v2 + chi + sqlx) serving Spanish RV1960 Bible data from a SQLite file. Everything lives in `main.go`; no sub-packages, no frontend.
 
 ## Commands
 - Run: `go run .` — serves on `:8888` (override via `PORT` env). Must run from repo root (DB path is relative).
@@ -20,9 +20,12 @@ Single-package Go API (Huma v2 + chi + sqlx) serving Spanish RV1960 Bible data f
 ## Tests
 - `main_test.go` seeds a throwaway SQLite DB in `t.TempDir()` and exercises endpoints through `newRouter(db)` (extracted from `main`) via `httptest` — tests never touch the committed `Bible.db`.
 - Router construction reads `GO_ENV`; tests pin it with `t.Setenv("GO_ENV", "LOCAL")` so the PROD-only transformer path stays off.
+- `TestProdSchemaLink` covers the PROD path: `GO_ENV=PROD` + `HOST_URL` + `X-Forwarded-Host` → asserts the `$schema` URL in the response body.
 
 ## Environment
-- `GO_ENV=LOCAL` for dev (see `.env.example`; loaded via godotenv). `GO_ENV=PROD|PRODUCTION` enables `CustomSchemaLinkTransformer` and OpenAPI server URLs, and requires `HOST_URL` — that code path is skipped entirely in local dev.
+- `GO_ENV=LOCAL` for dev (see `.env.example`; loaded via godotenv). `GO_ENV=PROD|PRODUCTION` sets the OpenAPI `servers` entries from `HOST_URL` (the API Gateway URL) and requires it — that code path is skipped entirely in local dev.
+- The app sits behind AWS API Gateway (`/dev` stage path) in front of EB. `X-Forwarded-Host` is mapped at the gateway; huma's built-in `SchemaLinkTransformer` (installed by `huma.DefaultConfig`) uses it to build the `$schema` URLs in response bodies. Don't reintroduce a custom transformer fork — it was deleted on purpose.
+- The transformer's `Link` header is silently dropped (humachi writes the status before transformers run); only the body `$schema` field reaches clients. Not a bug to chase.
 
 ## Deployment
 - Push to `master` triggers `.github/workflows/deploy-prod.yml`: `go vet` + `go test` run first; on success it cross-compiles `GOOS=linux GOARCH=arm64 go build .` and zips the whole repo (including `Bible.db`) to AWS Elastic Beanstalk. `.github/workflows/ci.yml` runs the same checks on pull requests.
