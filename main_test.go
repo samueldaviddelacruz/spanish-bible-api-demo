@@ -27,7 +27,9 @@ var seedVerses = []seedVerse{
 	{"spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.1", "Y dijo Dios: Sea la luz; y la luz fue.", "Génesis 1:3", 1, 3},
 	{"spa-RVR1960:Gen.2.1", "spa-RVR1960:Gen.2", "Fueron, pues, acabados los cielos y la tierra.", "Génesis 2:1", 2, 1},
 	{"spa-RVR1960:Gen.2.2", "spa-RVR1960:Gen.2", "Y acabó Dios en el día séptimo la obra que hizo.", "Génesis 2:2", 2, 2},
+	{"spa-RVR1960:Gen.3.1", "spa-RVR1960:Gen.3", "Cien por ciento 100% y guión_bajo.", "Génesis 3:1", 3, 1},
 	{"spa-RVR1960:Exod.1.1", "spa-RVR1960:Exod.1", "Estos son los nombres de los hijos de Israel.", "Éxodo 1:1", 1, 1},
+	{"notspa-RVR1960:Gen.1.1", "notspa-RVR1960:Gen.1", "Versículo intruso.", "Intruso 1:1", 1, 1},
 }
 
 func setupTestDB(t *testing.T) *sqlx.DB {
@@ -69,7 +71,9 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 	}{
 		{2, "spa-RVR1960:Gen.2"},
 		{1, "spa-RVR1960:Gen.1"},
+		{3, "spa-RVR1960:Gen.3"},
 		{1, "spa-RVR1960:Exod.1"},
+		{1, "notspa-RVR1960:Gen.1"},
 	}
 	for _, c := range chapters {
 		if _, err := db.Exec(`INSERT INTO chapters (chapter, id, osis_end) VALUES (?, ?, ?)`, c.chapter, c.id, c.id); err != nil {
@@ -182,7 +186,10 @@ func TestListBooks(t *testing.T) {
 	if books[0].ID != "spa-RVR1960:Gen" || books[1].ID != "spa-RVR1960:Exod" {
 		t.Fatalf("books not ordered by \"order\": %v", books)
 	}
-	if got := []string{books[0].Chapters[0].ID, books[0].Chapters[1].ID}; !slices.Equal(got, []string{"spa-RVR1960:Gen.1", "spa-RVR1960:Gen.2"}) {
+	if len(books[0].Chapters) != 3 {
+		t.Fatalf("Genesis should have 3 chapters, got %d", len(books[0].Chapters))
+	}
+	if got := []string{books[0].Chapters[0].ID, books[0].Chapters[1].ID, books[0].Chapters[2].ID}; !slices.Equal(got, []string{"spa-RVR1960:Gen.1", "spa-RVR1960:Gen.2", "spa-RVR1960:Gen.3"}) {
 		t.Fatalf("Genesis chapters not sorted: %v", got)
 	}
 	if len(books[1].Chapters) != 1 {
@@ -202,8 +209,8 @@ func TestGetBook(t *testing.T) {
 	if book.Name != "Génesis" || book.Testament != "OT" {
 		t.Fatalf("unexpected book: %+v", book)
 	}
-	if len(book.Chapters) != 2 {
-		t.Fatalf("got %d chapters, want 2", len(book.Chapters))
+	if len(book.Chapters) != 3 {
+		t.Fatalf("got %d chapters, want 3", len(book.Chapters))
 	}
 
 	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Rev")
@@ -411,4 +418,31 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("no matches: status = %d, want 200", status)
 	}
 	assertVerseIDs(t, body, []string{})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=%25")
+	if status != http.StatusOK {
+		t.Fatalf("literal percent query: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.3.1"})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=_")
+	if status != http.StatusOK {
+		t.Fatalf("literal underscore query: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.3.1"})
+}
+
+func TestEscapeLike(t *testing.T) {
+	cases := map[string]string{
+		"plain": "plain",
+		"100%":  `100\%`,
+		"a_b":   `a\_b`,
+		`c\d`:   `c\\d`,
+		`%\_`:   `\%\\\_`,
+	}
+	for in, want := range cases {
+		if got := escapeLike(in); got != want {
+			t.Errorf("escapeLike(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

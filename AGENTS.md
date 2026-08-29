@@ -12,7 +12,8 @@ Single-package Go API (Huma v2 + chi + sqlx) serving Spanish RV1960 Bible data f
 - `Bible.db` (~27MB) is the committed runtime datastore, opened by relative path in `main.go`. Never delete, regenerate, or rewrite it. `*.db-wal`/`*.db-shm` are gitignored runtime artifacts.
 - Driver is `modernc.org/sqlite` (pure Go — no CGO required).
 - Tables: `books`, `chapters`, `verses`. sqlx maps camelCase columns via `db:` tags. `text` and `order` are SQLite keywords and must be double-quoted in SQL (see existing queries).
-- `/api/verses/search` matches against the precomputed accent-stripped column `verses.cleanTextAscii` (not `cleanText`); inputs must go through `removeAccents()` first.
+- `/api/verses/search` matches against the precomputed accent-stripped column `verses.cleanTextAscii` (not `cleanText`); inputs go through `removeAccents()` then `escapeLike()` (LIKE wildcards are escaped via `ESCAPE '\'`).
+- Book/chapter lookups match by prefix (`LIKE bookId || '.%'`), never `'%bookId%'` — IDs like `notspa-RVR1960:Gen.1` must not match `Gen`. `/api/books` builds its nested response from one `books LEFT JOIN chapters` query.
 - Single-resource lookups (`db.Get`) return 404 when missing. List endpoints return `200 []`; range endpoints validate their boundary verses (404 if absent).
 - Verse list endpoints accept opt-in `limit`/`offset` query params (`PaginationRequest`); omitted or `limit=0` returns the full result set, keeping the original contract. Huma rejects pointer params, so `0` is the "unset" sentinel — don't add `minimum:"1"` to them.
 

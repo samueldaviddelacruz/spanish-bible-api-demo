@@ -33,6 +33,16 @@ type Book struct {
 	Testament string    `json:"testament"`
 	Chapters  []Chapter `json:"chapters"`
 }
+
+type bookChapterRow struct {
+	ID        string         `db:"id"`
+	Name      string         `db:"name"`
+	Order     int            `db:"order"`
+	Testament string         `db:"testament"`
+	ChapterID sql.NullString `db:"chapterId"`
+	Chapter   sql.NullInt64  `db:"chapter"`
+	OsisEnd   sql.NullString `db:"osis_end"`
+}
 type Chapter struct {
 	Chapter  int    `json:"chapter"`
 	ID       string `json:"id"`
@@ -165,6 +175,12 @@ func removeAccents(s string) string {
 		return s // Or handle error as appropriate for your application
 	}
 	return output
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	return strings.ReplaceAll(s, "_", `\_`)
 }
 
 func dbError(op string, err error) error {
@@ -328,25 +344,27 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Description: "Devuelve la lista completa de libros de la Biblia en la versión Reina Valera 1960, incluyendo información del testamento y los capítulos correspondientes.",
 		Tags:        []string{"Books"},
 	}, func(ctx context.Context, i *struct{}) (*ListResponse[Book], error) {
-		books := []Book{}
-		chapters := []Chapter{}
-		err := db.Select(&books, `SELECT id, name, "order", testament FROM books ORDER BY "order"`)
+		rows := []bookChapterRow{}
+		err := db.Select(&rows, `SELECT b.id, b.name, b."order", b.testament, c.id AS chapterId, c.chapter, c.osis_end
+								FROM books b
+								LEFT JOIN chapters c ON c.id LIKE b.id || '.%'
+								ORDER BY b."order", c.chapter`)
 		if err != nil {
 			return nil, dbError("error while getting books from DB", err)
 		}
-		err = db.Select(&chapters, "SELECT * FROM chapters")
-		if err != nil {
-			return nil, dbError("error while getting chapters from DB", err)
-		}
 
-		for i := range books {
-			bookChapters := Filter(chapters, func(c Chapter) bool {
-				return strings.Contains(c.ID, books[i].ID)
-			})
-			slices.SortFunc(bookChapters, func(c1 Chapter, c2 Chapter) int {
-				return c1.Chapter - c2.Chapter
-			})
-			books[i].Chapters = append(books[i].Chapters, bookChapters...)
+		books := []Book{}
+		index := map[string]int{}
+		for _, row := range rows {
+			pos, ok := index[row.ID]
+			if !ok {
+				books = append(books, Book{ID: row.ID, Name: row.Name, Order: row.Order, Testament: row.Testament, Chapters: []Chapter{}})
+				pos = len(books) - 1
+				index[row.ID] = pos
+			}
+			if row.ChapterID.Valid {
+				books[pos].Chapters = append(books[pos].Chapters, Chapter{Chapter: int(row.Chapter.Int64), ID: row.ChapterID.String, Osis_End: row.OsisEnd.String})
+			}
 		}
 		return &ListResponse[Book]{
 			Body: books,
@@ -370,7 +388,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("Book not found: %s", input.BookId))
 		}
-		err = db.Select(&book.Chapters, "SELECT * FROM chapters WHERE id like ? ORDER BY chapter", "%"+book.ID+"%")
+		err = db.Select(&book.Chapters, "SELECT * FROM chapters WHERE id like ? ORDER BY chapter", book.ID+".%")
 		if err != nil {
 			return nil, dbError("error while getting chapters from DB", err)
 		}
@@ -387,7 +405,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *ChapterToChapterVersesRequest) (*ListResponse[Verse], error) {
 		results := []Verse{}
-		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
+		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, input.BookId+".%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
 		}
@@ -411,7 +429,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *VerseRangeRequest) (*ListResponse[Verse], error) {
 		results := []Verse{}
-		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
+		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, input.BookId+".%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
 		}
@@ -446,7 +464,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 	}, func(ctx context.Context, input *ChapterRangeRequest) (*ListResponse[Verse], error) {
 		results := []Verse{}
 		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber BETWEEN ? AND ? ORDER BY chapterNumber, verseNumber`
-		query, args := paginateSQL(query, []any{"%" + input.BookId + "%", input.StartChapterNumber, input.EndChapterNumber}, input.PaginationRequest)
+		query, args := paginateSQL(query, []any{input.BookId + ".%", input.StartChapterNumber, input.EndChapterNumber}, input.PaginationRequest)
 		err := db.Select(&results, query, args...)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
@@ -505,8 +523,8 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *SearchRequest) (*ListResponse[Verse], error) {
 		verses := []Verse{}
-		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ?`
-		query, args := paginateSQL(query, []any{"%" + removeAccents(input.Query) + "%"}, input.PaginationRequest)
+		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ? ESCAPE '\'`
+		query, args := paginateSQL(query, []any{"%" + escapeLike(removeAccents(input.Query)) + "%"}, input.PaginationRequest)
 		err := db.Select(&verses, query, args...)
 		if err != nil {
 			return nil, dbError("error while getting verses from DB", err)
