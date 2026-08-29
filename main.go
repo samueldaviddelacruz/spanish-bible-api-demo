@@ -7,9 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -153,6 +156,11 @@ func removeAccents(s string) string {
 	}
 	return output
 }
+
+func dbError(op string, err error) error {
+	log.Printf("%s: %v", op, err)
+	return huma.Error500InternalServerError("internal server error")
+}
 func main() {
 	// Create a new router & API
 	db, err := sqlx.Open("sqlite", "Bible.db")
@@ -172,7 +180,46 @@ func main() {
 		}
 	}
 
+	router := newRouter(db)
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		fmt.Printf("Starting server on port %d ", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("forced shutdown: %v", err)
+	}
+}
+
+func newRouter(db *sqlx.DB) *chi.Mux {
 	router := chi.NewMux()
+
+	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.Ping(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
 	config := huma.DefaultConfig("RV 1960 API", "1.0.0")
 	config.Info.Contact = &huma.Contact{
@@ -251,11 +298,11 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		chapters := []Chapter{}
 		err := db.Select(&books, `SELECT id, name, "order", testament FROM books ORDER BY "order"`)
 		if err != nil {
-			return nil, fmt.Errorf("error while getting books from DB: %v", err)
+			return nil, dbError("error while getting books from DB", err)
 		}
 		err = db.Select(&chapters, "SELECT * FROM chapters")
 		if err != nil {
-			return nil, fmt.Errorf("error while getting chapters from DB: %v", err)
+			return nil, dbError("error while getting chapters from DB", err)
 		}
 
 		for i := range books {
@@ -285,13 +332,13 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		err := db.Get(&book, `SELECT id, name, "order", testament FROM books WHERE id = ?`, input.BookId)
 		if err != nil {
 			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting book from DB: %v", err)
+				return nil, dbError("error while getting book from DB", err)
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("Book not found: %s", input.BookId))
 		}
 		err = db.Select(&book.Chapters, "SELECT * FROM chapters WHERE id like ? ORDER BY chapter", "%"+book.ID+"%")
 		if err != nil {
-			return nil, fmt.Errorf("error while getting chapters from DB: %v", err)
+			return nil, dbError("error while getting chapters from DB", err)
 		}
 
 		return &SingleResponse[Book]{
@@ -308,14 +355,14 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		results := []Verse{}
 		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.StartChapterNumber))
+			return nil, dbError("error while getting verses from DB", err)
 		}
 		lastVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
 			return verse.ChapterNumber == int(input.EndChapterNumber) && verse.VerseNumber == int(input.EndVerseNumber)
 		})
+		if lastVerseIndex == -1 {
+			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.EndChapterNumber, input.EndVerseNumber))
+		}
 		results = results[:lastVerseIndex+1]
 		return &ListResponse[Verse]{
 			Body: results,
@@ -331,10 +378,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		results := []Verse{}
 		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.StartChapterNumber))
+			return nil, dbError("error while getting verses from DB", err)
 		}
 		startVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
 			return verse.ChapterNumber == int(input.StartChapterNumber) && verse.VerseNumber == int(input.StartVerseNumber)
@@ -342,6 +386,15 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		lastVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
 			return verse.ChapterNumber == int(input.EndChapterNumber) && verse.VerseNumber == int(input.EndVerseNumber)
 		})
+		if startVerseIndex == -1 {
+			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.StartChapterNumber, input.StartVerseNumber))
+		}
+		if lastVerseIndex == -1 {
+			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.EndChapterNumber, input.EndVerseNumber))
+		}
+		if lastVerseIndex < startVerseIndex {
+			return nil, huma.Error422UnprocessableEntity("endVerseNumber cannot be less than startVerseNumber")
+		}
 		results = results[startVerseIndex : lastVerseIndex+1]
 		return &ListResponse[Verse]{
 			Body: results,
@@ -361,12 +414,8 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 									AND chapterNumber BETWEEN ? AND ? 
 									ORDER BY chapterNumber,verseNumber`, "%"+input.BookId+"%", input.StartChapterNumber, input.EndChapterNumber)
 		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.StartChapterNumber))
+			return nil, dbError("error while getting verses from DB", err)
 		}
-		results = append(results, results...)
 		return &ListResponse[Verse]{
 			Body: results,
 		}, nil
@@ -382,10 +431,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		verses := []Verse{}
 		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ? ORDER BY verseNumber`, fmt.Sprintf("%s.%d", input.BookId, input.ChapterNumber))
 		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found: %s.%d", input.BookId, input.ChapterNumber))
+			return nil, dbError("error while getting verses from DB", err)
 		}
 
 		return &ListResponse[Verse]{
@@ -405,7 +451,7 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		err := db.Get(&verse, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE id = ?`, verseId)
 		if err != nil {
 			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verse from DB: %v", err)
+				return nil, dbError("error while getting verse from DB", err)
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d", input.BookId, input.ChapterNumber))
 		}
@@ -424,67 +470,12 @@ No contiene comentarios, notas teológicas ni versiones alternativas del texto.
 		verses := []Verse{}
 		err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ?`, "%"+removeAccents(input.Query)+"%")
 		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verses not found for query: %s", input.Query))
+			return nil, dbError("error while getting verses from DB", err)
 		}
 
 		return &ListResponse[Verse]{
 			Body: verses,
 		}, nil
 	})
-	/*
-		huma.Register(api, huma.Operation{
-			Method:      http.MethodGet,
-			Path:        "/api/books/verses/fix",
-			Summary:     "Obtener un versículo específico",
-			Description: "Devuelve un versículo específico de un libro a partir del número de capítulo y el número de versículo.",
-			Tags:        []string{"Verses"},
-		}, func(ctx context.Context, input *struct{}) (*ListResponse[struct {
-			ID            string `json:"id"`
-			ChapterId     string `json:"chapterId" db:"chapterId"`
-			CleanText     string `json:"cleanText" db:"cleanText"`
-			Reference     string `json:"reference" db:"reference"`
-			Text          string `json:"text" db:"text"`
-			ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
-			VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
-		}], error) {
-			verses := []struct {
-				ID            string `json:"id"`
-				ChapterId     string `json:"chapterId" db:"chapterId"`
-				CleanText     string `json:"cleanText" db:"cleanText"`
-				Reference     string `json:"reference" db:"reference"`
-				Text          string `json:"text" db:"text"`
-				ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
-				VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
-			}{}
-
-			err := db.Select(&verses, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses`)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return nil, fmt.Errorf("error while getting verses from DB: %v", err)
-				}
-				return nil, huma.Error404NotFound("verses not found")
-			}
-			for _, verse := range verses {
-				db.MustExec("UPDATE verses SET cleanTextAscii = ? WHERE id = ?", removeAccents(verse.CleanText), verse.ID)
-			}
-
-			return &ListResponse[struct {
-				ID            string `json:"id"`
-				ChapterId     string `json:"chapterId" db:"chapterId"`
-				CleanText     string `json:"cleanText" db:"cleanText"`
-				Reference     string `json:"reference" db:"reference"`
-				Text          string `json:"text" db:"text"`
-				ChapterNumber *int   `json:"chapterNumber" db:"chapterNumber"`
-				VerseNumber   *int   `json:"verseNumber" db:"verseNumber"`
-			}]{
-				Body: verses,
-			}, nil
-		})
-	*/
-	// Start the server!
-	fmt.Printf("Starting server on port %d ", port)
-	http.ListenAndServe(fmt.Sprintf(":%d", port), router)
+	return router
 }
