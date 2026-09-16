@@ -34,3 +34,7 @@ keys.js
 
 *.db-shm
 *.db-wal
+
+
+#output binaries
+spanish-bible-api-demo
