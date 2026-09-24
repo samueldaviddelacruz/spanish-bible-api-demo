@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -94,7 +95,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	t.Setenv("GO_ENV", "LOCAL")
-	srv := httptest.NewServer(newRouter(setupTestDB(t)))
+	srv := httptest.NewServer(newRouter(oneVersion(setupTestDB(t))))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -396,7 +397,7 @@ func TestPagination(t *testing.T) {
 func TestProdSchemaLink(t *testing.T) {
 	t.Setenv("GO_ENV", "PROD")
 	t.Setenv("HOST_URL", "https://gateway.example.com")
-	srv := httptest.NewServer(newRouter(setupTestDB(t)))
+	srv := httptest.NewServer(newRouter(oneVersion(setupTestDB(t))))
 	t.Cleanup(srv.Close)
 	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/1"
 
@@ -438,7 +439,7 @@ func TestProdOpenAPIServers(t *testing.T) {
 	t.Run("production sets servers from HOST_URL", func(t *testing.T) {
 		t.Setenv("GO_ENV", "PRODUCTION")
 		t.Setenv("HOST_URL", "https://gateway.example.com")
-		srv := httptest.NewServer(newRouter(setupTestDB(t)))
+		srv := httptest.NewServer(newRouter(oneVersion(setupTestDB(t))))
 		t.Cleanup(srv.Close)
 		resp, err := http.Get(srv.URL + "/openapi.json")
 		if err != nil {
@@ -532,5 +533,87 @@ func TestEscapeLike(t *testing.T) {
 		if got := escapeLike(in); got != want {
 			t.Errorf("escapeLike(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// oneVersion is a store holding a single translation, which is what a test with its own fixture
+// database wants.
+func oneVersion(db *sqlx.DB) versions {
+	return versions{byName: map[string]*sqlx.DB{DefaultVersion: db}, names: []string{DefaultVersion}}
+}
+
+func TestVersionsAreListed(t *testing.T) {
+	status, body := doGet(t, newTestServer(t).URL+"/api/versions")
+	if status != 200 {
+		t.Fatalf("GET /api/versions: status %d, body %s", status, body)
+	}
+
+	var got []string
+	mustUnmarshal(t, body, &got)
+	if len(got) != 1 || got[0] != DefaultVersion {
+		t.Errorf("the fixture serves %v, want just %s", got, DefaultVersion)
+	}
+}
+
+func TestUnknownVersionIsRejected(t *testing.T) {
+	status, body := doGet(t, newTestServer(t).URL+"/api/books?version=NOPE")
+
+	// An unknown translation is the request's fault, like a book id that does not exist.
+	if status != 422 {
+		t.Fatalf("status %d, want 422; body %s", status, body)
+	}
+	if !strings.Contains(string(body), DefaultVersion) {
+		t.Errorf("the rejection does not say what is available: %s", body)
+	}
+}
+
+// A second translation is a second database and nothing else: the same endpoints, asked for a
+// different version, answer from a file whose ids name it.
+func TestSecondTranslationIsServed(t *testing.T) {
+	for _, version := range []string{"LBLA", "NVI"} {
+		if _, err := os.Stat("Bible-" + version + ".db"); err != nil {
+			t.Skipf("Bible-%s.db is not built here", version)
+		}
+	}
+
+	store, err := openVersions()
+	if err != nil {
+		t.Fatalf("open the translations: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, db := range store.byName {
+			db.Close()
+		}
+	})
+
+	srv := httptest.NewServer(newRouter(store))
+	t.Cleanup(srv.Close)
+
+	if len(store.names) != 3 {
+		t.Fatalf("found %v, want the three translations", store.names)
+	}
+
+	status, body := doGet(t, srv.URL+"/api/books?version=LBLA")
+	if status != 200 {
+		t.Fatalf("GET /api/books?version=LBLA: status %d, body %.120s", status, body)
+	}
+
+	var books []Book
+	mustUnmarshal(t, body, &books)
+	if len(books) == 0 {
+		t.Fatal("no books came back")
+	}
+	if want := "spa-LBLA:Gen"; books[0].ID != want {
+		t.Errorf("the first book is %q, want %q", books[0].ID, want)
+	}
+
+	// And the shipped translation still answers when nothing is asked for.
+	status, body = doGet(t, srv.URL+"/api/books")
+	if status != 200 {
+		t.Fatalf("GET /api/books: status %d, body %s", status, body)
+	}
+	mustUnmarshal(t, body, &books)
+	if want := "spa-RVR1960:Gen"; books[0].ID != want {
+		t.Errorf("without a version the first book is %q, want %q", books[0].ID, want)
 	}
 }

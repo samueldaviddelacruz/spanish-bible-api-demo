@@ -16,6 +16,32 @@ Este proyecto es una API de la Biblia construida con [Go](https://golang.org/) u
 
 ---
 
+## 📖 Translations / Traducciones
+
+**English:**  
+Three Spanish translations are served, one SQLite database each. Every endpoint takes `?version=`,
+and without it the API answers with **RVR1960**. `GET /api/versions` lists what is available. Book IDs
+carry the translation too (`spa-LBLA:Gen.1.1`), so a URL says which text it wants.
+
+**Español:**  
+Se sirven tres traducciones al español, una base de datos SQLite para cada una. Todos los endpoints
+aceptan `?version=`, y sin él se responde con **RVR1960**. `GET /api/versions` devuelve las
+disponibles. Los identificadores de libro también llevan la traducción (`spa-LBLA:Gen.1.1`), así que
+una URL dice qué texto quiere.
+
+| | | |
+| --- | --- | --- |
+| **RVR1960** | Reina-Valera 1960 | `?version=RVR1960` (default / por defecto) |
+| **LBLA** | La Biblia de las Américas | `?version=LBLA` |
+| **NVI** | Nueva Versión Internacional | `?version=NVI` |
+
+```bash
+curl "http://localhost:8888/api/versions"
+curl "http://localhost:8888/api/books/spa-NVI:Gen/verses/chapter/1/verse/3?version=NVI"
+```
+
+---
+
 ## 🏗️ Technologies / Tecnologías
 
 - [Go](https://golang.org/)
