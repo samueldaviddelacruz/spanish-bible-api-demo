@@ -65,9 +65,8 @@ type SingleResponse[T any] struct {
 	Body T
 }
 type BookRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
-	BookId  string `path:"bookId" doc:"Identificador del libro bíblico (ej: 'spa-RVR1960:Gen')"`
+	TranslationRequest
+	BookId string `path:"bookId" doc:"Identificador del libro bíblico (ej: 'spa-RVR1960:Gen')"`
 }
 
 type PaginationRequest struct {
@@ -76,31 +75,27 @@ type PaginationRequest struct {
 }
 
 type VersesByChapterIdRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
+	TranslationRequest
 	BookRequest
 	PaginationRequest
 	ChapterNumber uint `path:"chapterNumber" required:"true" doc:"Número del capítulo del cual obtener los versículos"`
 }
 
 type VerseRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
+	TranslationRequest
 	BookRequest
 	ChapterNumber uint `path:"chapterNumber" required:"true" doc:"Número del capítulo que contiene el versículo"`
 	VerseNumber   uint `path:"verseNumber" required:"true" doc:"Número del versículo a obtener"`
 }
 
 type SearchRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
-	Query   string `query:"q" required:"true" doc:"texto o termino a buscar"`
+	TranslationRequest
+	Query string `query:"q" required:"true" doc:"texto o termino a buscar"`
 	PaginationRequest
 }
 
 type ChapterToChapterVersesRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
+	TranslationRequest
 	BookRequest
 	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial del rango"`
@@ -109,8 +104,7 @@ type ChapterToChapterVersesRequest struct {
 }
 
 type VerseRangeRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
+	TranslationRequest
 	BookRequest
 	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
@@ -120,8 +114,7 @@ type VerseRangeRequest struct {
 }
 
 type ChapterRangeRequest struct {
-	// Version selects the translation; empty means the shipped one.
-	Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
+	TranslationRequest
 	BookRequest
 	PaginationRequest
 	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
@@ -241,51 +234,94 @@ type versions struct {
 	names  []string
 }
 
-// openVersions opens every translation in the working directory: the shipped `Bible.db`, which is
-// RVR1960, and any `Bible-<NAME>.db` beside it. Discovery rather than configuration, and the same
-// naming rule the CLI uses, so adding a translation means adding a file.
-func openVersions() (versions, error) {
+// openVersions opens every translation in the working directory.
+func openVersions() (versions, error) { return openVersionsIn(".") }
+
+// openVersionsIn opens the databases in a directory: `Bible.db`, and any `Bible-<something>.db` beside
+// it.
+//
+// The file names say where to **look**; the data says what each one **is**. A database names its own
+// translation in every id (`spa-LBLA:Gen.1.1`) and in nothing else, which is precisely what lets a
+// second translation be a second file — so the name of the file is no evidence of what is inside it.
+// Trusting the name would serve a file called `Bible-copy.db` as "copy", and one renamed by mistake
+// under the wrong translation entirely, quietly.
+//
+// The glob stays narrow so that a stray file in the directory — a backup, say — is not mistaken for a
+// translation; anything it does match is opened and asked what it is.
+func openVersionsIn(dir string) (versions, error) {
 	found := versions{byName: map[string]*sqlx.DB{}}
 
-	add := func(name, path string) error {
+	candidates := []string{filepath.Join(dir, "Bible.db")}
+	others, err := filepath.Glob(filepath.Join(dir, "Bible-*.db"))
+	if err != nil {
+		return versions{}, err
+	}
+	candidates = append(candidates, others...)
+
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+
 		db, err := sqlx.Open("sqlite", path)
 		if err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
+			return versions{}, fmt.Errorf("open %s: %w", path, err)
 		}
 		// sqlx.Open is lazy, so a missing or unreadable file would otherwise fail at the first
 		// request instead of here.
 		if err := db.Ping(); err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
+			db.Close()
+			return versions{}, fmt.Errorf("open %s: %w", path, err)
 		}
-		found.byName[name] = db
-		found.names = append(found.names, name)
-		return nil
-	}
 
-	if _, err := os.Stat("Bible.db"); err == nil {
-		if err := add(DefaultVersion, "Bible.db"); err != nil {
-			return versions{}, err
+		version, err := versionOf(db)
+		if err != nil {
+			db.Close()
+			return versions{}, fmt.Errorf("%s: %w", path, err)
 		}
-	}
+		if _, taken := found.byName[version]; taken {
+			db.Close()
+			return versions{}, fmt.Errorf("%s says it is %s, and so does another file", path, version)
+		}
 
-	others, err := filepath.Glob("Bible-*.db")
-	if err != nil {
-		return versions{}, err
-	}
-	for _, path := range others {
-		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "Bible-"), ".db")
-		if name == "" {
-			continue
-		}
-		if err := add(name, path); err != nil {
-			return versions{}, err
-		}
+		found.byName[version] = db
+		found.names = append(found.names, version)
 	}
 
 	if len(found.names) == 0 {
-		return versions{}, fmt.Errorf("no Bible database found: expected Bible.db or Bible-<NAME>.db")
+		return versions{}, fmt.Errorf("no Bible database found in %s: expected Bible.db or Bible-<NAME>.db", dir)
 	}
 	return found, nil
+}
+
+// versionOf reads the translation out of the database itself: `spa-LBLA:Gen` is LBLA.
+func versionOf(db *sqlx.DB) (string, error) {
+	const q = `SELECT id FROM books LIMIT 1`
+
+	var id string
+	if err := db.Get(&id, q); err != nil {
+		return "", fmt.Errorf("read the version: %w", err)
+	}
+
+	prefix, _, ok := strings.Cut(id, ":")
+	if !ok {
+		return "", fmt.Errorf("book id %q does not name a version", id)
+	}
+	_, version, ok := strings.Cut(prefix, "-")
+	if !ok || version == "" {
+		return "", fmt.Errorf("book id %q does not name a version", id)
+	}
+	return version, nil
+}
+
+// TranslationRequest is the parameter every endpoint shares: which translation to read.
+//
+// Declared once and embedded, rather than repeated on each input, so adding a translation is one edit
+// here and a file in the directory. The values are the API's contract — a client can rely on them —
+// and a translation listed here whose database is missing is refused by the store with a 422 naming
+// the ones that are open, rather than being a lie in the spec.
+type TranslationRequest struct {
+	Version string `query:"version" enum:"RVR1960,LBLA,NVI" doc:"Traducción a leer (por defecto, RVR1960)"`
 }
 
 // canonBooks is the 66 book codes, which every translation uses: the canon is the canon, and only the
@@ -413,14 +449,14 @@ func newRouter(store versions) *chi.Mux {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	config := huma.DefaultConfig("RV 1960 API", "1.0.0")
+	config := huma.DefaultConfig("API Biblia en español", "1.0.0")
 	config.Info.Contact = &huma.Contact{
 		Name:  "Samuel De La Cruz",
 		Email: "delacruzportorrealsamueldavid@gmail.com",
 	}
 	config.Info.Description = `## 📘 Descripción de la API
 
-Esta API proporciona acceso estructurado al texto bíblico de la **Reina-Valera 1960 (RV1960)**. Permite consultar libros, capítulos y versículos específicos de la Biblia, facilitando la navegación por las Escrituras de manera programática. Está pensada para ser utilizada por aplicaciones web, móviles o sistemas que necesiten integrar o mostrar contenido bíblico de forma precisa y eficiente.
+Esta API proporciona acceso estructurado al texto bíblico en varias traducciones al español. Permite consultar libros, capítulos y versículos específicos de la Biblia, facilitando la navegación por las Escrituras de manera programática. Está pensada para ser utilizada por aplicaciones web, móviles o sistemas que necesiten integrar o mostrar contenido bíblico de forma precisa y eficiente.
 
 ---
 
@@ -475,13 +511,10 @@ No contiene comentarios ni notas teológicas.
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
 		Path:        "/api/books",
-		Summary:     "Obtener todos los libros de la Biblia (RV1960)",
-		Description: "Devuelve la lista completa de libros de la Biblia en la versión Reina Valera 1960, incluyendo información del testamento y los capítulos correspondientes.",
+		Summary:     "Obtener todos los libros de la Biblia",
+		Description: "Devuelve la lista completa de libros de la traducción elegida, incluyendo información del testamento y los capítulos correspondientes.",
 		Tags:        []string{"Books"},
-	}, func(ctx context.Context, i *struct {
-		// Version selects the translation; empty means the shipped one.
-		Version string `query:"version" doc:"Traducción a leer: RVR1960 (por defecto), LBLA o NVI"`
-	}) (*ListResponse[Book], error) {
+	}, func(ctx context.Context, i *TranslationRequest) (*ListResponse[Book], error) {
 		db, versionErr := store.pick(i.Version)
 		if versionErr != nil {
 			return nil, versionErr
@@ -517,8 +550,8 @@ No contiene comentarios ni notas teológicas.
 		Method: http.MethodGet,
 
 		Path:        "/api/books/{bookId}",
-		Summary:     "Obtener un libro específico (RV1960)",
-		Description: "Devuelve los detalles de un libro de la Biblia en la versión Reina Valera 1960 a partir de su ID, incluyendo los capítulos que lo componen.",
+		Summary:     "Obtener un libro específico",
+		Description: "Devuelve los detalles de un libro de la traducción elegida a partir de su ID, que lleva la traducción (por ejemplo, spa-LBLA:Gen), incluyendo los capítulos que lo componen.",
 		Tags:        []string{"Book"},
 	}, func(ctx context.Context, input *BookRequest) (*SingleResponse[Book], error) {
 		db, versionErr := store.pick(input.Version)
@@ -648,7 +681,7 @@ No contiene comentarios ni notas teológicas.
 		Method:      http.MethodGet,
 		Path:        "/api/books/{bookId}/verses/chapter/{chapterNumber}",
 		Summary:     "Obtener versículos por capítulo",
-		Description: "Devuelve todos los versículos de un capítulo específico de un libro de la Biblia en la versión Reina Valera 1960.",
+		Description: "Devuelve todos los versículos de un capítulo específico de un libro de la traducción elegida.",
 		Tags:        []string{"Verses"},
 	}, func(ctx context.Context, input *VersesByChapterIdRequest) (*ListResponse[Verse], error) {
 		db, versionErr := store.pick(input.Version)

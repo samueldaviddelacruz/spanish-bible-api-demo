@@ -558,25 +558,88 @@ func TestVersionsAreListed(t *testing.T) {
 func TestUnknownVersionIsRejected(t *testing.T) {
 	status, body := doGet(t, newTestServer(t).URL+"/api/books?version=NOPE")
 
-	// An unknown translation is the request's fault, like a book id that does not exist.
+	// An unknown translation is the request's fault, like a book id that does not exist. It is caught
+	// by the parameter's enum rather than by the handler, which is the trade the enum brings: the
+	// allowed values live in the schema, where a client can see them.
 	if status != 422 {
 		t.Fatalf("status %d, want 422; body %s", status, body)
 	}
-	if !strings.Contains(string(body), DefaultVersion) {
-		t.Errorf("the rejection does not say what is available: %s", body)
-	}
 }
 
-// A second translation is a second database and nothing else: the same endpoints, asked for a
-// different version, answer from a file whose ids name it.
-func TestSecondTranslationIsServed(t *testing.T) {
-	for _, version := range []string{"LBLA", "NVI"} {
-		if _, err := os.Stat("Bible-" + version + ".db"); err != nil {
-			t.Skipf("Bible-%s.db is not built here", version)
+// Every endpoint declares the translation parameter, and it offers the three translations: the values
+// are the API's contract, declared once on TranslationRequest rather than reflected at startup.
+func TestEveryEndpointDeclaresTheTranslations(t *testing.T) {
+	status, body := doGet(t, newTestServer(t).URL+"/openapi.json")
+	if status != 200 {
+		t.Fatalf("GET /openapi.json: status %d, body %.120s", status, body)
+	}
+
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name   string `json:"name"`
+				Schema struct {
+					Enum []string `json:"enum"`
+				} `json:"schema"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	mustUnmarshal(t, body, &spec)
+
+	operations, declared := 0, 0
+	for path, item := range spec.Paths {
+		for method, op := range item {
+			if len(op.Parameters) == 0 {
+				continue // the spec's own endpoints, and /health
+			}
+			operations++
+
+			for _, parameter := range op.Parameters {
+				if parameter.Name != "version" {
+					continue
+				}
+				declared++
+				want := []string{"RVR1960", "LBLA", "NVI"}
+				if len(parameter.Schema.Enum) != len(want) {
+					t.Errorf("%s %s offers %v, want %v", method, path, parameter.Schema.Enum, want)
+					continue
+				}
+				for i, version := range want {
+					if parameter.Schema.Enum[i] != version {
+						t.Errorf("%s %s offers %v, want %v", method, path, parameter.Schema.Enum, want)
+						break
+					}
+				}
+			}
 		}
 	}
 
-	store, err := openVersions()
+	if declared != operations || operations == 0 {
+		t.Errorf("%d of %d endpoints declare a version parameter", declared, operations)
+	}
+}
+
+// A file's name says where to look, not what is inside it. A database names its own translation in
+// every id, so a misleadingly named file is served under the name it actually carries — which is what
+// keeps a copy, or a rename, from quietly advertising the wrong text.
+func TestTheVersionComesFromTheDataNotTheFilename(t *testing.T) {
+	src, err := os.Open("Bible.db")
+	if err != nil {
+		t.Skip("the shipped database is not here")
+	}
+	defer src.Close()
+
+	dir := t.TempDir()
+	dst, err := os.Create(filepath.Join(dir, "Bible-not-what-it-says.db"))
+	if err != nil {
+		t.Fatalf("create the copy: %v", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	dst.Close()
+
+	store, err := openVersionsIn(dir)
 	if err != nil {
 		t.Fatalf("open the translations: %v", err)
 	}
@@ -586,34 +649,7 @@ func TestSecondTranslationIsServed(t *testing.T) {
 		}
 	})
 
-	srv := httptest.NewServer(newRouter(store))
-	t.Cleanup(srv.Close)
-
-	if len(store.names) != 3 {
-		t.Fatalf("found %v, want the three translations", store.names)
-	}
-
-	status, body := doGet(t, srv.URL+"/api/books?version=LBLA")
-	if status != 200 {
-		t.Fatalf("GET /api/books?version=LBLA: status %d, body %.120s", status, body)
-	}
-
-	var books []Book
-	mustUnmarshal(t, body, &books)
-	if len(books) == 0 {
-		t.Fatal("no books came back")
-	}
-	if want := "spa-LBLA:Gen"; books[0].ID != want {
-		t.Errorf("the first book is %q, want %q", books[0].ID, want)
-	}
-
-	// And the shipped translation still answers when nothing is asked for.
-	status, body = doGet(t, srv.URL+"/api/books")
-	if status != 200 {
-		t.Fatalf("GET /api/books: status %d, body %s", status, body)
-	}
-	mustUnmarshal(t, body, &books)
-	if want := "spa-RVR1960:Gen"; books[0].ID != want {
-		t.Errorf("without a version the first book is %q, want %q", books[0].ID, want)
+	if len(store.names) != 1 || store.names[0] != DefaultVersion {
+		t.Errorf("the file is served as %v, want %s, which is what its data says", store.names, DefaultVersion)
 	}
 }

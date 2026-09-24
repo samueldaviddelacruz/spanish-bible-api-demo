@@ -18,7 +18,13 @@ One database per translation, all with the same schema, all committed:
 | `Bible-LBLA.db` | `spa-LBLA:...` | La Biblia de las Américas |
 | `Bible-NVI.db` | `spa-NVI:...` | Nueva Versión Internacional |
 
-`openVersions` **discovers** them: `Bible.db` is RVR1960, and any `Bible-<NAME>.db` beside it is a translation named `<NAME>`. Discovery rather than configuration, and the same naming rule the CLI uses, so adding a translation is adding a file. Every endpoint takes `?version=`, empty meaning RVR1960; an unknown one is a 422 naming the ones that are open.
+`openVersions` **discovers** them: `Bible.db` is RVR1960, and any `Bible-<NAME>.db` beside it is a translation named `<NAME>`. Discovery rather than configuration, and the same naming rule the CLI uses, so adding a translation is adding a file.
+
+Every endpoint takes `?version=`; omitting it means RVR1960, and an unknown one is a 422 from the parameter's enum.
+
+The enum is declared **once**, on `TranslationRequest`, which every input struct embeds — Huma reads embedded structs, so the parameter reaches all eight endpoints from one line. Adding a translation is therefore that one line plus a database file, and the values are the API's contract rather than something discovered at runtime: the three databases are committed and deployed together, so a spec listing all three is true in every deployment. A version listed whose file is absent is not a lie either — the store refuses it with a 422 naming the ones that are open.
+
+`TestEveryEndpointDeclaresTheTranslations` asserts what that arrangement is for: every endpoint declares the parameter, and every one offers the same three values.
 
 **The translation lives in the data, not in a column.** Every id carries it (`spa-LBLA:Gen.1.1`), which is why a second translation is a second file with no schema change and no query that knows the difference — a handler picks its database at the top and the SQL below it is untouched.
 
