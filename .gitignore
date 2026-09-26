@@ -38,3 +38,7 @@ keys.js
 
 #output binaries
 spanish-bible-api-demo
+
+# The agent tool's own working directory — background-job snapshots from a session, never part of
+# the service. Nothing here reads it; ignoring it keeps it out of git status.
+.reasonix/

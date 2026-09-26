@@ -52,7 +52,7 @@ The two built translations come from the CLI, which owns the pipeline: `cmd/impo
 - The transformer's `Link` header is silently dropped (humachi writes the status before transformers run); only the body `$schema` field reaches clients. Not a bug to chase.
 
 ## Deployment
-- Push to `master` triggers `.github/workflows/deploy-prod.yml`: `go vet` + `go test` run first; on success it cross-compiles `GOOS=linux GOARCH=arm64 go build .` and zips the whole repo to AWS Elastic Beanstalk. That now means all three databases, so the bundle is about 45 MB — inside EB's limits, but it is why the deploy grew. `.github/workflows/ci.yml` runs the same checks on pull requests.
-- The `GO_VERSION` env in both workflows must match go.mod (currently 1.25.x); bump them together.
+- Push to `master` triggers `.github/workflows/deploy-prod.yml`: `gofmt -l`, `go vet` and `go test` run first; on success it cross-compiles `GOOS=linux GOARCH=arm64 go build .` and zips the whole repo to AWS Elastic Beanstalk. That now means all three databases, so the bundle is about 45 MB — inside EB's limits, but it is why the deploy grew. `.github/workflows/ci.yml` runs the same checks on pull requests.
+- Both workflows read the Go version from `go.mod` (`go-version-file`), so it cannot drift from the toolchain the module declares.
 - `Procfile` runs `./spanish-bible-api-demo` — binary name comes from the module basename, so don't rename the module.
 - `.platform/nginx/conf.d/cors.conf` is the EB nginx CORS config; keep it in sync with any CORS changes.

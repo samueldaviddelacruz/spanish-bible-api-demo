@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -224,6 +225,12 @@ func paginate[T any](items []T, p PaginationRequest) []T {
 // not ask for one.
 const DefaultVersion = "RVR1960"
 
+// maxConnections bounds how many connections a translation may open.
+//
+// Reads come from one read-only file, so past the cores more of them buy nothing and cost a file
+// handle each. The default is unbounded, which is a surprise under load rather than a limit under it.
+const maxConnections = 8
+
 // versions holds one open database per translation, all of them the same schema.
 //
 // A translation is a whole database rather than a column: the translation is carried in every id
@@ -267,21 +274,25 @@ func openVersionsIn(dir string) (versions, error) {
 		if err != nil {
 			return versions{}, fmt.Errorf("open %s: %w", path, err)
 		}
+		// The default pool opens a connection per request and keeps only two idle, which is churn for
+		// a file that is opened read-only.
+		db.SetMaxOpenConns(maxConnections)
+		db.SetMaxIdleConns(maxConnections)
 		// sqlx.Open is lazy, so a missing or unreadable file would otherwise fail at the first
 		// request instead of here.
 		if err := db.Ping(); err != nil {
-			db.Close()
-			return versions{}, fmt.Errorf("open %s: %w", path, err)
+			return versions{}, errors.Join(fmt.Errorf("open %s: %w", path, err), db.Close())
 		}
 
 		version, err := versionOf(db)
 		if err != nil {
-			db.Close()
-			return versions{}, fmt.Errorf("%s: %w", path, err)
+			return versions{}, errors.Join(fmt.Errorf("%s: %w", path, err), db.Close())
 		}
 		if _, taken := found.byName[version]; taken {
-			db.Close()
-			return versions{}, fmt.Errorf("%s says it is %s, and so does another file", path, version)
+			return versions{}, errors.Join(
+				fmt.Errorf("%s says it is %s, and so does another file", path, version),
+				db.Close(),
+			)
 		}
 
 		found.byName[version] = db
@@ -392,8 +403,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer func() {
-		for _, db := range store.byName {
-			db.Close()
+		for name, db := range store.byName {
+			if err := db.Close(); err != nil {
+				log.Printf("closing %s: %v", name, err)
+			}
 		}
 	}()
 	err = godotenv.Load()
@@ -424,7 +437,7 @@ func main() {
 
 	go func() {
 		fmt.Printf("Starting server on port %d ", port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()
