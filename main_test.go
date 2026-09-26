@@ -40,7 +40,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	schema := []string{
 		`CREATE TABLE books (_id TEXT, id TEXT PRIMARY KEY, name TEXT, "order" INTEGER, testament TEXT)`,
@@ -106,7 +106,7 @@ func doGet(t *testing.T, url string) (int, []byte) {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body for GET %s: %v", url, err)
@@ -410,7 +410,7 @@ func TestProdSchemaLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -445,7 +445,7 @@ func TestProdOpenAPIServers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -468,7 +468,7 @@ func TestProdOpenAPIServers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -627,7 +627,7 @@ func TestTheVersionComesFromTheDataNotTheFilename(t *testing.T) {
 	if err != nil {
 		t.Skip("the shipped database is not here")
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dir := t.TempDir()
 	dst, err := os.Create(filepath.Join(dir, "Bible-not-what-it-says.db"))
@@ -637,7 +637,7 @@ func TestTheVersionComesFromTheDataNotTheFilename(t *testing.T) {
 	if _, err := io.Copy(dst, src); err != nil {
 		t.Fatalf("copy: %v", err)
 	}
-	dst.Close()
+	_ = dst.Close()
 
 	store, err := openVersionsIn(dir)
 	if err != nil {
@@ -645,7 +645,7 @@ func TestTheVersionComesFromTheDataNotTheFilename(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, db := range store.byName {
-			db.Close()
+			_ = db.Close()
 		}
 	})
 

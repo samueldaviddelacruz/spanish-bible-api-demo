@@ -512,7 +512,7 @@ No contiene comentarios ni notas teológicas.
 				Description: "API URL",
 			},
 		}
-		config.OpenAPI.Servers = []*huma.Server{
+		config.Servers = []*huma.Server{
 			{
 				URL:         serverUrl,
 				Description: "API URL",
