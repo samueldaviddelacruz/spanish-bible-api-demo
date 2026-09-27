@@ -4,7 +4,7 @@ go 1.25.0
 
 require modernc.org/sqlite v1.42.2
 
-require github.com/joho/godotenv v1.5.1 // indirect
+require github.com/joho/godotenv v1.5.1
 
 require (
 	github.com/danielgtaylor/huma/v2 v2.37.3
