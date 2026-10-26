@@ -425,7 +425,17 @@ func openVersionsIn(dir string) (versions, error) {
 		// stop being fresh.
 		fmt.Fprintf(fingerprint, "%s:%d:%d;", path, info.Size(), info.ModTime().UnixNano())
 
-		db, err := sqlx.Open("sqlite", path)
+		// The files are immutable: they arrive with the deployment and nothing here ever writes to
+		// them. Saying so lets the driver skip locking and keeps SQLite from creating -wal/-shm
+		// sidecars beside the data — and it is what lets the same binary serve from a read-only
+		// filesystem, such as Lambda's /var/task.
+		//
+		// immutable=1 also means a leftover write-ahead log would be ignored rather than replayed, so
+		// a sidecar is a reason to refuse to start rather than to serve stale text.
+		if _, err := os.Stat(path + "-wal"); err == nil {
+			return versions{}, fmt.Errorf("%s-wal exists: checkpoint the database before serving it", path)
+		}
+		db, err := sqlx.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
 		if err != nil {
 			return versions{}, fmt.Errorf("open %s: %w", path, err)
 		}
@@ -612,6 +622,32 @@ func main() {
 // pages by default where the reading endpoint deliberately does not.
 const defaultSearchLimit = 25
 
+// legacyRedirect points an old reading route at the endpoint that replaced it.
+//
+// The Location is deliberately **relative**. API Gateway strips its stage prefix (`/dev`) before the
+// request reaches this process, so an absolute "/api/…" would send the client to the host root, out
+// of the stage, and back into a 403. A relative reference is resolved by the client against its own
+// URL — which still carries the prefix — so it works locally, behind the gateway and behind the
+// tunnel without this service knowing anything about them.
+func legacyRedirect(w http.ResponseWriter, r *http.Request, from string) {
+	// "/api/books/{id}/verses/chapter/1/verse/2" → four segments follow "verses", so four "..".
+	segments := strings.Split(r.URL.Path, "/")
+	ups := 0
+	for i, segment := range segments {
+		if segment == "verses" {
+			ups = len(segments) - i - 1
+			break
+		}
+	}
+	target := strings.Repeat("../", ups) + "verses?from=" + from
+
+	// Header first, not http.Redirect: Redirect resolves a relative target against the request and
+	// emits an absolute path, which is the very thing that breaks behind a stage prefix. Writing the
+	// reference verbatim leaves the client to resolve it against its own URL.
+	w.Header().Set("Location", withQuery(target, r))
+	w.WriteHeader(http.StatusPermanentRedirect)
+}
+
 // withQuery carries the caller's query string (?version=, ?limit=, ?offset=) onto a redirect target
 // that already carries a parameter of its own.
 func withQuery(target string, r *http.Request) string {
@@ -632,14 +668,46 @@ func cacheable(fingerprint string, next http.Handler) http.Handler {
 		}
 
 		tag := etagFor(fingerprint, r.URL.RequestURI())
-		w.Header().Set("ETag", tag)
-		w.Header().Set("Cache-Control", "public, max-age=3600")
 		if etagMatches(r.Header.Get("If-None-Match"), tag) {
+			w.Header().Set("ETag", tag)
+			w.Header().Set("Cache-Control", "public, max-age=3600")
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(&cacheOn200{ResponseWriter: w, tag: tag}, r)
 	})
+}
+
+// cacheOn200 adds the cache metadata once the handler has actually produced a 200.
+//
+// Marking the response before the handler runs would be simpler, but it advertises a 404 or a 422 as
+// cacheable too — and now that a CDN is in front of this service, an hour-long TTL on an error is a
+// real problem: the bot traffic that walks mistyped paths would fill the edge cache with junk, and a
+// caller who mistypes a range would keep seeing that error after fixing it.
+type cacheOn200 struct {
+	http.ResponseWriter
+	tag       string
+	wroteHead bool
+}
+
+func (c *cacheOn200) WriteHeader(status int) {
+	if !c.wroteHead {
+		c.wroteHead = true
+		if status == http.StatusOK {
+			c.Header().Set("ETag", c.tag)
+			c.Header().Set("Cache-Control", "public, max-age=3600")
+		} else {
+			c.Header().Set("Cache-Control", "no-store")
+		}
+	}
+	c.ResponseWriter.WriteHeader(status)
+}
+
+func (c *cacheOn200) Write(b []byte) (int, error) {
+	if !c.wroteHead {
+		c.WriteHeader(http.StatusOK) // net/http implies 200 on the first write; do it explicitly.
+	}
+	return c.ResponseWriter.Write(b)
 }
 
 // etagFor derives a tag from the request and the data fingerprint rather than from the response
@@ -676,13 +744,10 @@ func newRouter(store versions) http.Handler {
 	// their behaviour cannot drift from the endpoint they point at. The three range variants got 351
 	// requests between them, one of which was a single request, and are simply gone.
 	mux.HandleFunc("GET /api/books/{bookId}/verses/chapter/{chapterNumber}", func(w http.ResponseWriter, r *http.Request) {
-		target := "/api/books/" + r.PathValue("bookId") + "/verses?from=" + r.PathValue("chapterNumber")
-		http.Redirect(w, r, withQuery(target, r), http.StatusPermanentRedirect)
+		legacyRedirect(w, r, r.PathValue("chapterNumber"))
 	})
 	mux.HandleFunc("GET /api/books/{bookId}/verses/chapter/{chapterNumber}/verse/{verseNumber}", func(w http.ResponseWriter, r *http.Request) {
-		from := r.PathValue("chapterNumber") + ":" + r.PathValue("verseNumber")
-		target := "/api/books/" + r.PathValue("bookId") + "/verses?from=" + from
-		http.Redirect(w, r, withQuery(target, r), http.StatusPermanentRedirect)
+		legacyRedirect(w, r, r.PathValue("chapterNumber")+":"+r.PathValue("verseNumber"))
 	})
 
 	config := huma.DefaultConfig("API Biblia en español", "1.0.0")

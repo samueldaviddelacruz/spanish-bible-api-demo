@@ -309,11 +309,11 @@ func TestLegacyRoutesRedirect(t *testing.T) {
 	}}
 
 	for _, tc := range []struct{ from, want string }{
-		{"/api/books/spa-RVR1960:Gen/verses/chapter/1", "/api/books/spa-RVR1960:Gen/verses?from=1"},
-		{"/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/2", "/api/books/spa-RVR1960:Gen/verses?from=1:2"},
+		{"/api/books/spa-RVR1960:Gen/verses/chapter/1", "../../verses?from=1"},
+		{"/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/2", "../../../../verses?from=1:2"},
 		{
 			"/api/books/spa-RVR1960:Gen/verses/chapter/1?version=RVR1960",
-			"/api/books/spa-RVR1960:Gen/verses?from=1&version=RVR1960",
+			"../../verses?from=1&version=RVR1960",
 		},
 	} {
 		resp, err := client.Get(srv.URL + tc.from)
@@ -333,6 +333,33 @@ func TestLegacyRoutesRedirect(t *testing.T) {
 	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1")
 	if status != http.StatusOK {
 		t.Fatalf("following the redirect: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
+}
+
+// TestLegacyRedirectUnderAStagePrefix is the regression test for a bug that only appeared once the
+// service sat behind API Gateway: the gateway strips its stage prefix before the request arrives, so
+// an absolute Location sends the client to the host root, out of the stage, and into a 403. Mounting
+// the router under /dev reproduces that exactly — the redirect must survive it.
+func TestLegacyRedirectUnderAStagePrefix(t *testing.T) {
+	srv := httptest.NewServer(http.StripPrefix("/dev", newRouter(oneVersion(setupTestDB(t)))))
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/dev/api/books/spa-RVR1960:Gen/verses/chapter/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("following the redirect behind a prefix: status = %d, body = %s", resp.StatusCode, body)
+	}
+	if got := resp.Request.URL.Path; got != "/dev/api/books/spa-RVR1960:Gen/verses" {
+		t.Fatalf("landed on %q, want the /dev prefix preserved", got)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
 }
@@ -596,6 +623,20 @@ func TestCacheRevalidation(t *testing.T) {
 	_ = other.Body.Close()
 	if other.Header.Get("ETag") == tag {
 		t.Fatalf("two different URLs share the ETag %q", tag)
+	}
+
+	// Errors must not be advertised as cacheable. On EB this was cosmetic; with a CDN honouring
+	// origin headers, a cached 404 would outlive the mistake that caused it.
+	notFound, err := http.Get(srv.URL + "/api/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = notFound.Body.Close()
+	if got := notFound.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("404 Cache-Control = %q, want no-store", got)
+	}
+	if got := notFound.Header.Get("ETag"); got != "" {
+		t.Fatalf("404 carried an ETag %q, want none", got)
 	}
 
 	// The health check is a live probe, not content.
