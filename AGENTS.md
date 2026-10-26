@@ -2,6 +2,33 @@
 
 Single-package Go API (Huma v2 on `net/http`'s `ServeMux` via the `humago` adapter, plus sqlx) serving Spanish Bible text from SQLite files — one per translation, currently RVR1960, LBLA and NVI. Everything lives in `main.go`; no sub-packages, no frontend.
 
+## Endpoints
+
+Six operations, all `GET` (plus two redirects that exist only for old clients):
+
+| Endpoint | What it answers |
+| --- | --- |
+| `/api/versions` | which translations this instance serves |
+| `/api/books` | every book with its chapters — the navigation index |
+| `/api/books/{bookId}` | one book with its chapters |
+| `/api/books/{bookId}/verses` | a run of verses: a chapter, a range, or a whole book |
+| `/api/books/{bookId}/verses/{from}` | the same, with the start of the range in the path |
+| `/api/verses/search` | full-text search, optionally within one book |
+
+`/api/books/{bookId}/verses` is deliberately the only reading endpoint. It replaced five routes — a chapter, a single verse, a chapter range, a chapter-to-verse range, and a verse range — that were one query with different bounds. Bounds use the notation readers already use: `1` is a chapter, `1:16` is a verse, and both parameters are optional.
+
+- no bounds → the whole book
+- `?from=1` → chapter 1, because an omitted `to` ends at the end of the chapter `from` names
+- `?from=1:16` → 1:16 to the end of chapter 1
+- `?from=1&to=3` → chapters 1 to 3
+- `?from=1:1&to=2:25` → across a chapter boundary
+
+**The `/{from}` form is not redundant, so don't delete it.** Fifteen months of nginx access logs showed ~19,800 requests to `/api/books/{book}/verses/1` and `…/verses/1:16` — a Flutter client (user agents `Dart/3.x`) that assumed exactly this shape and got a 404 every time, from August 2025 into October 2026. It feeds the same `serveVerses` as the query form, differs only in where the bound is written, and `?to=` closes the range.
+
+A bound that does not exist is a **404**; an inverted or unparsable range is a **422**; an omitted bound is never an error. There is no single-verse route: ask for the run, or `?from=1:1&to=1:1`.
+
+**Two old routes survive as 308s**, in `newRouter` rather than as Huma operations: `…/verses/chapter/{n}` and `…/verses/chapter/{n}/verse/{v}`, which carried 4,978 and 594 requests in those same logs. They redirect to the new endpoint with the caller's query string (`?version=`, `?limit=`) preserved. The three range variants got 351 requests between them — one of them exactly once — and are gone outright. If a request arrives on a redirect, its `Location` is the canonical URL, so nothing downstream needs to know the old shape.
+
 ## Commands
 - Run: `go run .` — serves on `:8888` (override via `PORT` env). Must run from repo root (DB paths are relative).
 - Verify: `go build ./... && go vet ./... && go test ./...`
@@ -20,9 +47,9 @@ One database per translation, all with the same schema, all committed:
 
 `openVersions` **discovers** them: `Bible.db` is RVR1960, and any `Bible-<NAME>.db` beside it is a translation named `<NAME>`. Discovery rather than configuration, and the same naming rule the CLI uses, so adding a translation is adding a file.
 
-Every endpoint takes `?version=`; omitting it means RVR1960, and an unknown one is a 422 from the parameter's enum.
+Every endpoint except `/api/versions` takes `?version=`; omitting it means RVR1960, and an unknown one is a 422 from the parameter's enum.
 
-The enum is declared **once**, on `TranslationRequest`, which every input struct embeds — Huma reads embedded structs, so the parameter reaches all eight endpoints from one line. Adding a translation is therefore that one line plus a database file, and the values are the API's contract rather than something discovered at runtime: the three databases are committed and deployed together, so a spec listing all three is true in every deployment. A version listed whose file is absent is not a lie either — the store refuses it with a 422 naming the ones that are open.
+The enum is declared **once**, on `TranslationRequest`, which every input struct embeds — Huma reads embedded structs, so the parameter reaches every endpoint that takes one, from a single line. Adding a translation is therefore that one line plus a database file, and the values are the API's contract rather than something discovered at runtime: the three databases are committed and deployed together, so a spec listing all three is true in every deployment. A version listed whose file is absent is not a lie either — the store refuses it with a 422 naming the ones that are open.
 
 `TestEveryEndpointDeclaresTheTranslations` asserts what that arrangement is for: every endpoint declares the parameter, and every one offers the same three values.
 
@@ -36,8 +63,10 @@ The two built translations come from the CLI, which owns the pipeline: `cmd/impo
 - Tables: `books`, `chapters`, `verses`. sqlx maps camelCase columns via `db:` tags. `text` and `order` are SQLite keywords and must be double-quoted in SQL (see existing queries).
 - `/api/verses/search` matches against the precomputed accent-stripped column `verses.cleanTextAscii` (not `cleanText`); inputs go through `removeAccents()` then `escapeLike()` (LIKE wildcards are escaped via `ESCAPE '\'`). The built translations fold that column in full where the shipped file folds it only partly; `LIKE` is case-insensitive either way, so search behaves the same against all three.
 - Book/chapter lookups match by prefix (`LIKE bookId || '.%'`), never `'%bookId%'` — IDs like `notspa-RVR1960:Gen.1` must not match `Gen`. `/api/books` builds its nested response from one `books LEFT JOIN chapters` query.
-- Single-resource lookups (`db.Get`) return 404 when missing. List endpoints return `200 []`; range endpoints validate their boundary verses (404 if absent).
-- Verse list endpoints accept opt-in `limit`/`offset` query params (`PaginationRequest`); an omitted `limit` returns the full result set, keeping the original contract. Huma rejects pointer params — it panics at registration with `pointers are not supported for form/header/path/query parameters` — so an absent `limit` reaches the handler as `0`, and `0` is what `paginateSQL` reads as "no limit". `minimum:"1"` is what keeps that sentinel off the wire: Huma validates **only the parameters a request actually carried**, so an omitted `limit` stays legal while an explicit `limit=0` is a 422. Verified against huma v2.37.3 — don't drop the tag, and don't reintroduce a `limit=0` contract in the docs or tests.
+- A missing thing is a **404**, not an empty list: `/api/books/{bookId}` when the book is absent, and `/api/books/{bookId}/verses` when a **named** bound does not exist (the start chapter is checked too, which is why `?from=99` is an error rather than the `200 []` the old chapter route returned). A range with no bounds is the whole book and always has verses, so `200 []` now only means a filter genuinely matched nothing — that is search.
+- The reading endpoint accepts opt-in `limit`/`offset` query params (`PaginationRequest`); an omitted `limit` returns the whole range, which is the original contract. Huma rejects pointer params — it panics at registration with `pointers are not supported for form/header/path/query parameters` — so an absent `limit` reaches the handler as `0`, and `0` is what `paginateSQL` reads as "no limit". `minimum:"1"` keeps that sentinel off the wire: Huma validates **only the parameters a request actually carried**, so an omitted `limit` stays legal while an explicit `limit=0` is a 422. Verified against huma v2.37.3 — don't drop the tag, and don't reintroduce a `limit=0` contract in the docs or tests.
+- Search is the exception to that contract: it pages **by default** (`default:"25"`, `maximum:"200"`), because its unbounded result set is the one that is large — `q=Dios` matches 4,033 verses, 2 MB of JSON. The match count comes back in `X-Total-Count` rather than in the body, so the body stays the same array shape as every other list endpoint while `limit`/`offset` trim it. `?book=` narrows the search to one book.
+- Responses carry `ETag` and `Cache-Control: public, max-age=3600`, both keyed to a fingerprint of the open database files (path+size+mtime, computed in `openVersionsIn`). A redeploy that ships different databases therefore invalidates every cached URL; `/health` is excluded because it is a live probe rather than content. The tag is derived from the fingerprint plus the request URI, never from the response body — hashing bodies would mean buffering megabyte responses.
 
 ## Tests
 - `main_test.go` seeds a throwaway SQLite DB in `t.TempDir()` and exercises endpoints through `newRouter(oneVersion(db))` (both extracted from `main`) via `httptest` — tests never touch the committed databases.

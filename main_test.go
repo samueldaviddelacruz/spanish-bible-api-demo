@@ -226,114 +226,115 @@ func TestGetBook(t *testing.T) {
 	}
 }
 
-func TestGetVersesByChapter(t *testing.T) {
+func TestVerses(t *testing.T) {
 	srv := newTestServer(t)
+	base := srv.URL + "/api/books/spa-RVR1960:Gen/verses"
 
-	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
-
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/99")
-	if status != http.StatusOK {
-		t.Fatalf("missing chapter: status = %d, want 200", status)
-	}
-	assertVerseIDs(t, body, []string{})
-}
-
-func TestGetVerse(t *testing.T) {
-	srv := newTestServer(t)
-
-	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/1")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	var verse Verse
-	mustUnmarshal(t, body, &verse)
-	if verse.ID != "spa-RVR1960:Gen.1.1" || verse.CleanText != "En el principio creó Dios los cielos y la tierra." {
-		t.Fatalf("unexpected verse: %+v", verse)
+	get := func(t *testing.T, query string, want []string) {
+		t.Helper()
+		status, body := doGet(t, base+query)
+		if status != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, body = %s", query, status, body)
+		}
+		assertVerseIDs(t, body, want)
 	}
 
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/99")
-	if status != http.StatusNotFound {
-		t.Fatalf("missing verse: status = %d, want 404", status)
-	}
-}
-
-func TestVerseRange(t *testing.T) {
-	srv := newTestServer(t)
-
-	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/2/to/2/verse/1")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/99/to/2/verse/1")
-	if status != http.StatusNotFound {
-		t.Fatalf("missing start verse: status = %d, want 404 (used to panic)", status)
-	}
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/1/to/2/verse/99")
-	if status != http.StatusNotFound {
-		t.Fatalf("missing end verse: status = %d, want 404", status)
-	}
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/3/to/1/verse/1")
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("inverted verse range: status = %d, want 422 (used to panic)", status)
-	}
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/2/verse/1/to/1/verse/1")
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("inverted chapter range: status = %d, want 422", status)
-	}
-}
-
-func TestChapterToChapterVerses(t *testing.T) {
-	srv := newTestServer(t)
-
-	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/to/2/verse/1")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
-
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/to/1/verse/2")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2"})
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/to/2/verse/99")
-	if status != http.StatusNotFound {
-		t.Fatalf("missing end verse: status = %d, want 404 (used to return silent empty list)", status)
-	}
-}
-
-func TestChapterRange(t *testing.T) {
-	srv := newTestServer(t)
-
-	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/chapter/1/to/chapter/2")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", status, body)
-	}
-	assertVerseIDs(t, body, []string{
+	// One endpoint, five shapes. These were five routes before: a chapter, a verse inside it, a
+	// chapter range, a chapter-to-verse range, and a verse range.
+	get(t, "?from=1", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
+	get(t, "?from=1:2", []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
+	get(t, "?from=1&to=2", []string{
 		"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3",
 		"spa-RVR1960:Gen.2.1", "spa-RVR1960:Gen.2.2",
 	})
+	get(t, "?from=1:2&to=2:1", []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
+	get(t, "?from=1&to=2:1", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
 
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/chapter/5/to/chapter/6")
+	// No bounds is the whole book — and it must not pick up `notspa-RVR1960:Gen`, which is seeded
+	// precisely to catch a query that matches the book id loosely.
+	get(t, "", []string{
+		"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3",
+		"spa-RVR1960:Gen.2.1", "spa-RVR1960:Gen.2.2", "spa-RVR1960:Gen.3.1",
+	})
+
+	// The path shorthand — the shape clients were already calling: same answers, bound in the path
+	// instead of the query.
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{"/1", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"}},
+		{"/1:2", []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"}},
+		{"/1?to=2", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1", "spa-RVR1960:Gen.2.2"}},
+		{"/1:2?to=2:1", []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"}},
+	} {
+		status, body := doGet(t, base+tc.path)
+		if status != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, body = %s", tc.path, status, body)
+		}
+		assertVerseIDs(t, body, tc.want)
+	}
+
+	// A bound the translation does not have is an error, not an empty list. The first two are the
+	// cases the old routes got wrong: a missing start verse used to panic, a missing end verse used
+	// to return a silent empty list. The third used to answer `200 []` for a chapter that is not
+	// there.
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"missing start verse", "?from=1:99", http.StatusNotFound},
+		{"missing end verse", "?from=1:1&to=2:99", http.StatusNotFound},
+		{"missing chapter", "?from=99", http.StatusNotFound},
+		{"inverted verses", "?from=1:3&to=1:1", http.StatusUnprocessableEntity},
+		{"inverted chapters", "?from=2&to=1", http.StatusUnprocessableEntity},
+		{"unparsable bound", "?from=abc", http.StatusUnprocessableEntity},
+		{"zero verse", "?from=1:0", http.StatusUnprocessableEntity},
+	} {
+		status, body := doGet(t, base+tc.query)
+		if status != tc.want {
+			t.Fatalf("%s: GET %s: status = %d, want %d, body = %s", tc.name, tc.query, status, tc.want, body)
+		}
+	}
+}
+
+// TestLegacyRoutesRedirect pins the two pre-merge routes that carried real traffic. They must keep
+// working — by pointing at the endpoint that replaced them, not by duplicating it — because 5,572
+// requests came through them in the last fifteen months of nginx logs.
+func TestLegacyRoutesRedirect(t *testing.T) {
+	srv := newTestServer(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	for _, tc := range []struct{ from, want string }{
+		{"/api/books/spa-RVR1960:Gen/verses/chapter/1", "/api/books/spa-RVR1960:Gen/verses?from=1"},
+		{"/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/2", "/api/books/spa-RVR1960:Gen/verses?from=1:2"},
+		{
+			"/api/books/spa-RVR1960:Gen/verses/chapter/1?version=RVR1960",
+			"/api/books/spa-RVR1960:Gen/verses?from=1&version=RVR1960",
+		},
+	} {
+		resp, err := client.Get(srv.URL + tc.from)
+		if err != nil {
+			t.Fatalf("GET %s: %v", tc.from, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusPermanentRedirect {
+			t.Fatalf("GET %s: status = %d, want 308", tc.from, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Location"); got != tc.want {
+			t.Fatalf("GET %s: Location = %q, want %q", tc.from, got, tc.want)
+		}
+	}
+
+	// A client that follows the redirect gets exactly the verses the old route served.
+	status, body := doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1")
 	if status != http.StatusOK {
-		t.Fatalf("empty range: status = %d, want 200", status)
+		t.Fatalf("following the redirect: status = %d, body = %s", status, body)
 	}
-	assertVerseIDs(t, body, []string{})
-
-	status, _ = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/chapter/2/to/chapter/1")
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("inverted chapter range: status = %d, want 422", status)
-	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
 }
 
 func TestPagination(t *testing.T) {
@@ -363,40 +364,38 @@ func TestPagination(t *testing.T) {
 	}
 	assertVerseIDs(t, body, []string{})
 
-	// An omitted `limit` still means "no limit" — that is the original contract, and it is the
-	// only way to ask for it now that `limit=0` is rejected.
+	// Search pages by default now — an omitted `limit` is 25, not "everything" — while the reading
+	// endpoint keeps the original contract, where an omitted `limit` really does mean no limit.
 	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios")
 	if status != http.StatusOK {
 		t.Fatalf("no limit: status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.2"})
 
-	// 0 is the internal "unset" sentinel, so it must not be sendable. It used to mean "no limit"
-	// here, which made a computed page size of 0 fetch the whole table.
 	status, _ = doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=0")
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("limit=0: status = %d, want 422", status)
 	}
 
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1?limit=2&offset=1")
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses?from=1&limit=2&offset=1")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
 
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/chapter/1/to/chapter/2?limit=2&offset=1")
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses?from=1&to=2&limit=2&offset=1")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"})
 
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/verse/1/to/2/verse/2?limit=2&offset=2")
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses?from=1:1&to=2:2&limit=2&offset=2")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"})
 
-	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/from/1/to/2/verse/2?limit=1")
+	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses?from=1&to=2:2&limit=1")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
@@ -408,7 +407,7 @@ func TestProdSchemaLink(t *testing.T) {
 	t.Setenv("HOST_URL", "https://gateway.example.com")
 	srv := httptest.NewServer(newRouter(oneVersion(setupTestDB(t))))
 	t.Cleanup(srv.Close)
-	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses/chapter/1/verse/1"
+	url := srv.URL + "/api/books/spa-RVR1960:Gen"
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -429,8 +428,8 @@ func TestProdSchemaLink(t *testing.T) {
 	}
 	var payload map[string]any
 	mustUnmarshal(t, body, &payload)
-	if got, _ := payload["$schema"].(string); got != "https://gateway.example.com/dev/schemas/Verse.json" {
-		t.Fatalf("$schema = %q, want https://gateway.example.com/dev/schemas/Verse.json", got)
+	if got, _ := payload["$schema"].(string); got != "https://gateway.example.com/dev/schemas/Book.json" {
+		t.Fatalf("$schema = %q, want https://gateway.example.com/dev/schemas/Book.json", got)
 	}
 
 	status, body := doGet(t, url)
@@ -439,8 +438,8 @@ func TestProdSchemaLink(t *testing.T) {
 	}
 	var fallback map[string]any
 	mustUnmarshal(t, body, &fallback)
-	if got, _ := fallback["$schema"].(string); !strings.Contains(got, "/dev/schemas/Verse.json") {
-		t.Fatalf("$schema without X-Forwarded-Host = %q, want it to contain /dev/schemas/Verse.json", got)
+	if got, _ := fallback["$schema"].(string); !strings.Contains(got, "/dev/schemas/Book.json") {
+		t.Fatalf("$schema without X-Forwarded-Host = %q, want it to contain /dev/schemas/Book.json", got)
 	}
 }
 
@@ -528,6 +527,95 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("literal underscore query: status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.3.1"})
+
+	// The match count travels in a header so the body stays the array shape every other list
+	// endpoint returns, and so `limit`/`offset` can trim the body without lying about the total.
+	resp, err := http.Get(srv.URL + "/api/verses/search?q=Dios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if got := resp.Header.Get("X-Total-Count"); got != "3" {
+		t.Fatalf("X-Total-Count = %q, want 3", got)
+	}
+
+	// `?book=` is the reader's "find in this book": same query, narrowed to one book.
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&book=spa-RVR1960:Gen")
+	if status != http.StatusOK {
+		t.Fatalf("book filter: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.2"})
+
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&book=spa-RVR1960:Exod")
+	if status != http.StatusOK {
+		t.Fatalf("book filter: status = %d, body = %s", status, body)
+	}
+	assertVerseIDs(t, body, []string{})
+}
+
+func TestCacheRevalidation(t *testing.T) {
+	srv := newTestServer(t)
+	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses?from=1"
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	tag := resp.Header.Get("ETag")
+	if tag == "" {
+		t.Fatal("no ETag on a response whose content cannot change between deploys")
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=3600" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+
+	// A conditional request with the same tag costs no body.
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("If-None-Match", tag)
+	notModified, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = notModified.Body.Close() }()
+	if notModified.StatusCode != http.StatusNotModified {
+		t.Fatalf("If-None-Match: status = %d, want 304", notModified.StatusCode)
+	}
+
+	// A different URL must be a different tag, or every cache entry would collapse onto one.
+	other, err := http.Get(srv.URL + "/api/books/spa-RVR1960:Gen/verses?from=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = other.Body.Close()
+	if other.Header.Get("ETag") == tag {
+		t.Fatalf("two different URLs share the ETag %q", tag)
+	}
+
+	// The health check is a live probe, not content.
+	health, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = health.Body.Close()
+	if health.Header.Get("ETag") != "" || health.Header.Get("Cache-Control") != "" {
+		t.Fatalf("/health should not be cacheable: ETag=%q Cache-Control=%q",
+			health.Header.Get("ETag"), health.Header.Get("Cache-Control"))
+	}
+}
+
+// The tag must depend on the databases, not just the URL: a redeploy that ships different text has
+// to invalidate what caches are holding.
+func TestETagIsKeyedToTheDatabaseFingerprint(t *testing.T) {
+	if etagFor("fingerprint-a", "/api/books") == etagFor("fingerprint-b", "/api/books") {
+		t.Fatal("the same URL under two different database fingerprints shares an ETag")
+	}
 }
 
 func TestEscapeLike(t *testing.T) {

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -82,82 +85,139 @@ type PaginationRequest struct {
 	Offset uint `query:"offset" doc:"Cantidad de versículos a omitir (opcional)"`
 }
 
-type VersesByChapterIdRequest struct {
+// VersesRequest is the API's one reading endpoint: a contiguous run of verses in one book.
+//
+// `from` and `to` use the notation readers already use — `1` is a chapter, `1:16` a verse — and both
+// are optional. An omitted `from` starts at the beginning of the book; an omitted `to` ends at the
+// end of the chapter `from` names. So `?from=1` is chapter 1, `?from=1:16` runs from 1:16 to the end
+// of chapter 1, `?from=1&to=3` is three chapters, and no bounds at all is the whole book.
+type VersesRequest struct {
 	TranslationRequest
 	BookRequest
 	PaginationRequest
-	ChapterNumber uint `path:"chapterNumber" required:"true" doc:"Número del capítulo del cual obtener los versículos"`
+	From string `query:"from" pattern:"^[0-9]+(:[0-9]+)?$" example:"1:16" doc:"Inicio del rango: capítulo ('1') o capítulo:versículo ('1:16'). Omitido = principio del libro."`
+	To   string `query:"to" pattern:"^[0-9]+(:[0-9]+)?$" example:"2:25" doc:"Fin del rango, en la misma notación. Omitido = final del capítulo indicado en 'from'."`
 }
 
-type VerseRequest struct {
+// VersesPathRequest is the shorthand form of the same request: the start of the range in the path.
+//
+// It exists because clients were already calling `/api/books/{bookId}/verses/1` and
+// `…/verses/1:16` — 19,800 such requests in fifteen months of nginx logs, every one a 404 — so the
+// endpoint meets the shape people had assumed rather than only the one it shipped with.
+type VersesPathRequest struct {
 	TranslationRequest
 	BookRequest
-	ChapterNumber uint `path:"chapterNumber" required:"true" doc:"Número del capítulo que contiene el versículo"`
-	VerseNumber   uint `path:"verseNumber" required:"true" doc:"Número del versículo a obtener"`
+	PaginationRequest
+	From string `path:"from" required:"true" pattern:"^[0-9]+(:[0-9]+)?$" example:"1:16" doc:"Inicio del rango: capítulo ('1') o capítulo:versículo ('1:16')."`
+	To   string `query:"to" pattern:"^[0-9]+(:[0-9]+)?$" example:"2:25" doc:"Fin del rango, en la misma notación. Omitido = final del capítulo indicado en 'from'."`
 }
 
 type SearchRequest struct {
 	TranslationRequest
-	Query string `query:"q" required:"true" doc:"texto o termino a buscar"`
-	PaginationRequest
+	Query  string `query:"q" required:"true" doc:"texto o termino a buscar"`
+	Book   string `query:"book" doc:"Limita la búsqueda a un libro (ej: 'spa-RVR1960:Gen'). Omitido = toda la traducción."`
+	Limit  uint   `query:"limit" default:"25" minimum:"1" maximum:"200" doc:"Máximo de resultados (por defecto 25, máximo 200)."`
+	Offset uint   `query:"offset" doc:"Resultados a omitir (opcional)"`
 }
 
-type ChapterToChapterVersesRequest struct {
-	TranslationRequest
-	BookRequest
-	PaginationRequest
-	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial del rango"`
-	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final del rango"`
-	EndVerseNumber     uint `path:"endVerseNumber" required:"true" doc:"Último versículo a incluir del capítulo final"`
+// SearchResponse carries the total in a header rather than in the body: the body stays the same
+// array every other list endpoint returns, and a client that wants the count reads one header
+// instead of a different response shape.
+type SearchResponse struct {
+	Total int `header:"X-Total-Count" doc:"Total de versículos que coinciden, antes de limit y offset."`
+	Body  []Verse
 }
 
-type VerseRangeRequest struct {
-	TranslationRequest
-	BookRequest
-	PaginationRequest
-	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
-	StartVerseNumber   uint `path:"startVerseNumber" required:"true" doc:"Versículo inicial dentro del capítulo inicial"`
-	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final"`
-	EndVerseNumber     uint `path:"endVerseNumber" required:"true" doc:"Versículo final dentro del capítulo final"`
+// reference is one end of a range: a chapter, and a verse within it when one was named.
+type reference struct {
+	chapter uint
+	verse   uint // 0 means the whole chapter.
 }
 
-type ChapterRangeRequest struct {
-	TranslationRequest
-	BookRequest
-	PaginationRequest
-	StartChapterNumber uint `path:"startChapterNumber" required:"true" doc:"Capítulo inicial"`
-	EndChapterNumber   uint `path:"endChapterNumber" required:"true" doc:"Capítulo final"`
+// bounds is a resolved, ordered range. wholeBook is the case with no bounds at all, where the query
+// needs no positional predicate.
+type bounds struct {
+	fromChapter uint
+	fromVerse   uint
+	toChapter   uint
+	toVerse     uint
+	wholeBook   bool
 }
 
-func (i *ChapterToChapterVersesRequest) Resolve(ctx huma.Context) []error {
-	if i.EndChapterNumber < i.StartChapterNumber {
-		return []error{&huma.ErrorDetail{
-			Location: "path.endChapterNumber",
-			Message:  "endChapterNumber cannot be less than startChapterNumber",
-			Value:    i.StartChapterNumber,
-		}}
+// parseReference reads `1` or `1:16`. `pattern` has already rejected anything else, so this only has
+// to parse — but it still rejects zero, which `pattern` cannot express.
+func parseReference(name, value string) (reference, error) {
+	if value == "" {
+		return reference{}, nil
 	}
-	return nil
-}
-func (i *VerseRangeRequest) Resolve(ctx huma.Context) []error {
-	if i.EndChapterNumber < i.StartChapterNumber {
-		return []error{&huma.ErrorDetail{
-			Location: "path.endChapterNumber",
-			Message:  "endChapterNumber cannot be less than startChapterNumber",
-			Value:    i.StartChapterNumber,
-		}}
+
+	chapterText, verseText, hasVerse := strings.Cut(value, ":")
+	chapter, err := strconv.ParseUint(chapterText, 10, 32)
+	if err != nil || chapter == 0 {
+		return reference{}, huma.Error422UnprocessableEntity("invalid range bound", &huma.ErrorDetail{
+			Location: "query." + name,
+			Message:  "expected a chapter number of at least 1",
+			Value:    value,
+		})
 	}
-	return nil
-}
-func (i *ChapterRangeRequest) Resolve(ctx huma.Context) []error {
-	if i.EndChapterNumber < i.StartChapterNumber {
-		return []error{&huma.ErrorDetail{
-			Location: "path.endChapterNumber",
-			Message:  "endChapterNumber cannot be less than startChapterNumber",
-			Value:    i.StartChapterNumber,
-		}}
+
+	ref := reference{chapter: uint(chapter)}
+	if !hasVerse {
+		return ref, nil
 	}
-	return nil
+
+	verse, err := strconv.ParseUint(verseText, 10, 32)
+	if err != nil || verse == 0 {
+		return reference{}, huma.Error422UnprocessableEntity("invalid range bound", &huma.ErrorDetail{
+			Location: "query." + name,
+			Message:  "expected a verse number of at least 1 after the colon",
+			Value:    value,
+		})
+	}
+	ref.verse = uint(verse)
+	return ref, nil
+}
+
+// resolveBounds turns the two query strings into an ordered range, applying the defaults that make
+// the endpoint read naturally: no bounds is the whole book, and a missing `to` stops at the end of
+// the chapter `from` names.
+func resolveBounds(fromText, toText string) (bounds, error) {
+	if fromText == "" && toText == "" {
+		return bounds{wholeBook: true}, nil
+	}
+
+	from, err := parseReference("from", fromText)
+	if err != nil {
+		return bounds{}, err
+	}
+	to, err := parseReference("to", toText)
+	if err != nil {
+		return bounds{}, err
+	}
+
+	if to.chapter == 0 {
+		to = reference{chapter: from.chapter}
+	}
+	if from.chapter == 0 {
+		from = reference{chapter: 1}
+	}
+
+	if to.chapter < from.chapter ||
+		(to.chapter == from.chapter && to.verse != 0 && to.verse < from.verse) {
+		return bounds{}, huma.Error422UnprocessableEntity("the end of the range is before its start",
+			&huma.ErrorDetail{
+				Location: "query.to",
+				Message:  "the end of the range is before its start",
+				Value:    toText,
+			})
+	}
+
+	return bounds{
+		fromChapter: from.chapter,
+		fromVerse:   from.verse,
+		toChapter:   to.chapter,
+		toVerse:     to.verse,
+	}, nil
 }
 
 func Filter[T any](slice []T, f func(T) bool) []T {
@@ -214,18 +274,94 @@ func paginateSQL(query string, args []any, p PaginationRequest) (string, []any) 
 	return query + " LIMIT ? OFFSET ?", append(args, p.Limit, p.Offset)
 }
 
-func paginate[T any](items []T, p PaginationRequest) []T {
-	if p.Limit == 0 && p.Offset == 0 {
-		return items
+// serveVerses is the body of both reading routes — the canonical `?from=&to=` form and the `{from}`
+// path shorthand — so the two can never disagree about validation, ordering or paging.
+func serveVerses(store versions, version, bookId, from, to string, page PaginationRequest) (*ListResponse[Verse], error) {
+	db, versionErr := store.pick(version)
+	if versionErr != nil {
+		return nil, versionErr
 	}
-	if p.Offset >= uint(len(items)) {
-		return []T{}
+	if err := requireBook(bookId); err != nil {
+		return nil, err
 	}
-	items = items[p.Offset:]
-	if p.Limit != 0 && uint(len(items)) > p.Limit {
-		items = items[:p.Limit]
+
+	rangeBounds, err := resolveBounds(from, to)
+	if err != nil {
+		return nil, err
 	}
-	return items
+	if err := requireBounds(db, bookId, rangeBounds); err != nil {
+		return nil, err
+	}
+
+	query, args := versesQuery(bookId, rangeBounds, page)
+	verses := []Verse{}
+	if err := db.Select(&verses, query, args...); err != nil {
+		return nil, dbError("error while getting verses from DB", err)
+	}
+	return &ListResponse[Verse]{Body: verses}, nil
+}
+
+// versesQuery builds the one reading query. The bounds are a row-value comparison on
+// (chapterNumber, verseNumber), which orders in SQLite exactly as it orders on the page — so a run
+// of verses is one scan, and limit/offset apply to it directly. The routes this replaced fetched
+// every verse in the chapter range and then sliced the slice in Go, so `?limit=2` over fifty
+// chapters still read all of them.
+func versesQuery(bookId string, b bounds, p PaginationRequest) (string, []any) {
+	query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ?`
+	args := []any{bookId + ".%"}
+
+	if !b.wholeBook {
+		query += ` AND (chapterNumber, verseNumber) >= (?, ?)`
+		args = append(args, b.fromChapter, b.fromVerse)
+
+		toVerse := b.toVerse
+		if toVerse == 0 {
+			toVerse = math.MaxInt32 // an unnamed verse means the end of that chapter.
+		}
+		query += ` AND (chapterNumber, verseNumber) <= (?, ?)`
+		args = append(args, b.toChapter, toVerse)
+	}
+
+	return paginateSQL(query+" ORDER BY chapterNumber, verseNumber", args, p)
+}
+
+// requireBounds answers 404 for a bound this translation does not have, rather than serving an empty
+// list: a reader who asks for Genesis 1:99 has made a mistake worth reporting. Checking the start
+// chapter too is what turns `?from=99` into an error instead of the silent `200 []` the old chapter
+// route returned.
+func requireBounds(db *sqlx.DB, bookId string, b bounds) error {
+	if b.wholeBook {
+		return nil
+	}
+	if err := requirePosition(db, bookId, b.fromChapter, b.fromVerse); err != nil {
+		return err
+	}
+	return requirePosition(db, bookId, b.toChapter, b.toVerse)
+}
+
+// requirePosition checks one end of a range: a chapter when no verse was named, a verse when one was.
+func requirePosition(db *sqlx.DB, bookId string, chapter, verse uint) error {
+	var exists int
+
+	if verse == 0 {
+		err := db.Get(&exists, `SELECT 1 FROM chapters WHERE id = ?`, fmt.Sprintf("%s.%d", bookId, chapter))
+		if errors.Is(err, sql.ErrNoRows) {
+			return huma.Error404NotFound(fmt.Sprintf("chapter not found: %s.%d", bookId, chapter))
+		}
+		if err != nil {
+			return dbError("error while checking chapter exists", err)
+		}
+		return nil
+	}
+
+	err := db.Get(&exists, `SELECT 1 FROM verses WHERE id = ?`, fmt.Sprintf("%s.%d.%d", bookId, chapter, verse))
+	if errors.Is(err, sql.ErrNoRows) {
+		return huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", bookId, chapter, verse))
+	}
+	if err != nil {
+		return dbError("error while checking verse exists", err)
+	}
+	return nil
 }
 
 // DefaultVersion is the translation the shipped database holds, and what a request gets when it does
@@ -246,6 +382,11 @@ const maxConnections = 8
 type versions struct {
 	byName map[string]*sqlx.DB
 	names  []string
+
+	// fingerprint identifies the content these databases hold, and so versions every response for
+	// caching. It comes from the files themselves rather than a build stamp, because the files are
+	// what change.
+	fingerprint string
 }
 
 // openVersions opens every translation in the working directory.
@@ -272,10 +413,17 @@ func openVersionsIn(dir string) (versions, error) {
 	}
 	candidates = append(candidates, others...)
 
+	fingerprint := sha256.New()
+
 	for _, path := range candidates {
-		if _, err := os.Stat(path); err != nil {
+		info, err := os.Stat(path)
+		if err != nil {
 			continue
 		}
+		// Size and mtime identify the content without hashing 48 MB of pages at startup. The files
+		// only change when the service is redeployed, which is exactly when a cached response should
+		// stop being fresh.
+		fmt.Fprintf(fingerprint, "%s:%d:%d;", path, info.Size(), info.ModTime().UnixNano())
 
 		db, err := sqlx.Open("sqlite", path)
 		if err != nil {
@@ -309,6 +457,7 @@ func openVersionsIn(dir string) (versions, error) {
 	if len(found.names) == 0 {
 		return versions{}, fmt.Errorf("no Bible database found in %s: expected Bible.db or Bible-<NAME>.db", dir)
 	}
+	found.fingerprint = hex.EncodeToString(fingerprint.Sum(nil))
 	return found, nil
 }
 
@@ -458,6 +607,59 @@ func main() {
 	}
 }
 
+// defaultSearchLimit is the page a search gets when the caller does not ask for one. Search is the
+// only endpoint whose unbounded result is large — `q=Dios` matches 4,033 verses, 2 MB of JSON — so it
+// pages by default where the reading endpoint deliberately does not.
+const defaultSearchLimit = 25
+
+// withQuery carries the caller's query string (?version=, ?limit=, ?offset=) onto a redirect target
+// that already carries a parameter of its own.
+func withQuery(target string, r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return target
+	}
+	return target + "&" + r.URL.RawQuery
+}
+
+// cacheable marks responses as revalidatable. Every response is a pure function of the databases,
+// and their fingerprint changes only when the service is redeployed, so the fingerprint is a valid
+// version for every URL — including `/openapi.json` and the schema documents.
+func cacheable(fingerprint string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r) // a health check is a live probe, not content worth caching.
+			return
+		}
+
+		tag := etagFor(fingerprint, r.URL.RequestURI())
+		w.Header().Set("ETag", tag)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		if etagMatches(r.Header.Get("If-None-Match"), tag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// etagFor derives a tag from the request and the data fingerprint rather than from the response
+// body: hashing bodies would mean buffering them, and the largest legal response is megabytes.
+func etagFor(fingerprint, uri string) string {
+	sum := sha256.Sum256([]byte(fingerprint + " " + uri))
+	return `W/"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+// etagMatches is the If-None-Match comparison: a comma-separated list in which either side may be
+// the wildcard.
+func etagMatches(header, tag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		if candidate = strings.TrimSpace(candidate); candidate == "*" || candidate == tag {
+			return true
+		}
+	}
+	return false
+}
+
 func newRouter(store versions) http.Handler {
 	mux := http.NewServeMux()
 
@@ -467,6 +669,20 @@ func newRouter(store versions) http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+
+	// The two reading routes that carried real traffic before the merge: 4,978 and 594 requests in
+	// the last fifteen months of nginx logs. They are 308s rather than handlers — one line each, and
+	// their behaviour cannot drift from the endpoint they point at. The three range variants got 351
+	// requests between them, one of which was a single request, and are simply gone.
+	mux.HandleFunc("GET /api/books/{bookId}/verses/chapter/{chapterNumber}", func(w http.ResponseWriter, r *http.Request) {
+		target := "/api/books/" + r.PathValue("bookId") + "/verses?from=" + r.PathValue("chapterNumber")
+		http.Redirect(w, r, withQuery(target, r), http.StatusPermanentRedirect)
+	})
+	mux.HandleFunc("GET /api/books/{bookId}/verses/chapter/{chapterNumber}/verse/{verseNumber}", func(w http.ResponseWriter, r *http.Request) {
+		from := r.PathValue("chapterNumber") + ":" + r.PathValue("verseNumber")
+		target := "/api/books/" + r.PathValue("bookId") + "/verses?from=" + from
+		http.Redirect(w, r, withQuery(target, r), http.StatusPermanentRedirect)
 	})
 
 	config := huma.DefaultConfig("API Biblia en español", "1.0.0")
@@ -599,157 +815,25 @@ No contiene comentarios ni notas teológicas.
 			Body: book,
 		}, nil
 	})
+
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
-		Path:        "/api/books/{bookId}/verses/from/{startChapterNumber}/to/{endChapterNumber}/verse/{endVerseNumber}",
-		Summary:     "Obtener versículos entre capítulos (límite por versículo final)",
-		Description: "Devuelve todos los versículos desde un capítulo inicial hasta un capítulo final, incluyendo solo hasta el versículo especificado en el último capítulo.",
+		Path:        "/api/books/{bookId}/verses",
+		Summary:     "Obtener versículos de un libro",
+		Description: "Devuelve un tramo continuo de versículos. Sin parámetros devuelve el libro entero; `from` y `to` aceptan `capítulo` o `capítulo:versículo`, así que `?from=1` es el capítulo 1, `?from=1:16` va de 1:16 al final del capítulo 1, `?from=1&to=3` son los capítulos 1 a 3 y `?from=1:1&to=2:25` es un rango entre versículos de dos capítulos.",
 		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *ChapterToChapterVersesRequest) (*ListResponse[Verse], error) {
-		db, versionErr := store.pick(input.Version)
-		if versionErr != nil {
-			return nil, versionErr
-		}
-		if err := requireBook(input.BookId); err != nil {
-			return nil, err
-		}
-		results := []Verse{}
-		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, input.BookId+".%", input.StartChapterNumber, input.EndChapterNumber)
-		if err != nil {
-			return nil, dbError("error while getting verses from DB", err)
-		}
-		lastVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
-			return verse.ChapterNumber == int(input.EndChapterNumber) && verse.VerseNumber == int(input.EndVerseNumber)
-		})
-		if lastVerseIndex == -1 {
-			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.EndChapterNumber, input.EndVerseNumber))
-		}
-		results = results[:lastVerseIndex+1]
-		results = paginate(results, input.PaginationRequest)
-		return &ListResponse[Verse]{
-			Body: results,
-		}, nil
-	})
-	huma.Register(api, huma.Operation{
-		Method:      http.MethodGet,
-		Path:        "/api/books/{bookId}/verses/from/{startChapterNumber}/verse/{startVerseNumber}/to/{endChapterNumber}/verse/{endVerseNumber}",
-		Summary:     "Obtener versículos entre capítulo y versículo inicial y final",
-		Description: "Devuelve los versículos que se encuentran entre un capítulo y versículo inicial y un capítulo y versículo final, respetando ambos límites.",
-		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *VerseRangeRequest) (*ListResponse[Verse], error) {
-		db, versionErr := store.pick(input.Version)
-		if versionErr != nil {
-			return nil, versionErr
-		}
-		if err := requireBook(input.BookId); err != nil {
-			return nil, err
-		}
-		results := []Verse{}
-		err := db.Select(&results, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber between ? AND ?  ORDER BY chapterNumber, verseNumber`, input.BookId+".%", input.StartChapterNumber, input.EndChapterNumber)
-		if err != nil {
-			return nil, dbError("error while getting verses from DB", err)
-		}
-		startVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
-			return verse.ChapterNumber == int(input.StartChapterNumber) && verse.VerseNumber == int(input.StartVerseNumber)
-		})
-		lastVerseIndex := slices.IndexFunc(results, func(verse Verse) bool {
-			return verse.ChapterNumber == int(input.EndChapterNumber) && verse.VerseNumber == int(input.EndVerseNumber)
-		})
-		if startVerseIndex == -1 {
-			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.StartChapterNumber, input.StartVerseNumber))
-		}
-		if lastVerseIndex == -1 {
-			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d.%d", input.BookId, input.EndChapterNumber, input.EndVerseNumber))
-		}
-		if lastVerseIndex < startVerseIndex {
-			return nil, huma.Error422UnprocessableEntity("endVerseNumber cannot be less than startVerseNumber")
-		}
-		results = results[startVerseIndex : lastVerseIndex+1]
-		results = paginate(results, input.PaginationRequest)
-		return &ListResponse[Verse]{
-			Body: results,
-		}, nil
+	}, func(ctx context.Context, input *VersesRequest) (*ListResponse[Verse], error) {
+		return serveVerses(store, input.Version, input.BookId, input.From, input.To, input.PaginationRequest)
 	})
 
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
-		Path:        "/api/books/{bookId}/verses/from/chapter/{startChapterNumber}/to/chapter/{endChapterNumber}",
-		Summary:     "Obtener versículos entre capítulos",
-		Description: "Devuelve todos los versículos que se encuentran entre dos capítulos específicos del mismo libro, sin límite por número de versículo.",
+		Path:        "/api/books/{bookId}/verses/{from}",
+		Summary:     "Obtener versículos desde un capítulo o un versículo",
+		Description: "Forma abreviada de `/api/books/{bookId}/verses`, con el inicio del rango en la ruta: `/verses/1` es el capítulo 1, `/verses/1:16` va de 1:16 al final del capítulo 1, y `?to=` cierra el rango (`?to=3`, `?to=2:25`). Devuelve lo mismo que la forma con parámetros.",
 		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *ChapterRangeRequest) (*ListResponse[Verse], error) {
-		db, versionErr := store.pick(input.Version)
-		if versionErr != nil {
-			return nil, versionErr
-		}
-		if err := requireBook(input.BookId); err != nil {
-			return nil, err
-		}
-		results := []Verse{}
-		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId LIKE ? AND chapterNumber BETWEEN ? AND ? ORDER BY chapterNumber, verseNumber`
-		query, args := paginateSQL(query, []any{input.BookId + ".%", input.StartChapterNumber, input.EndChapterNumber}, input.PaginationRequest)
-		err := db.Select(&results, query, args...)
-		if err != nil {
-			return nil, dbError("error while getting verses from DB", err)
-		}
-		return &ListResponse[Verse]{
-			Body: results,
-		}, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		Method:      http.MethodGet,
-		Path:        "/api/books/{bookId}/verses/chapter/{chapterNumber}",
-		Summary:     "Obtener versículos por capítulo",
-		Description: "Devuelve todos los versículos de un capítulo específico de un libro de la traducción elegida.",
-		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *VersesByChapterIdRequest) (*ListResponse[Verse], error) {
-		db, versionErr := store.pick(input.Version)
-		if versionErr != nil {
-			return nil, versionErr
-		}
-		if err := requireBook(input.BookId); err != nil {
-			return nil, err
-		}
-		verses := []Verse{}
-		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE chapterId = ? ORDER BY verseNumber`
-		query, args := paginateSQL(query, []any{fmt.Sprintf("%s.%d", input.BookId, input.ChapterNumber)}, input.PaginationRequest)
-		err := db.Select(&verses, query, args...)
-		if err != nil {
-			return nil, dbError("error while getting verses from DB", err)
-		}
-
-		return &ListResponse[Verse]{
-			Body: verses,
-		}, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		Method:      http.MethodGet,
-		Path:        "/api/books/{bookId}/verses/chapter/{chapterNumber}/verse/{verseNumber}",
-		Summary:     "Obtener un versículo específico",
-		Description: "Devuelve un versículo específico de un libro a partir del número de capítulo y el número de versículo.",
-		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *VerseRequest) (*SingleResponse[Verse], error) {
-		db, versionErr := store.pick(input.Version)
-		if versionErr != nil {
-			return nil, versionErr
-		}
-		if err := requireBook(input.BookId); err != nil {
-			return nil, err
-		}
-		verse := Verse{}
-		verseId := fmt.Sprintf("%s.%d.%d", input.BookId, input.ChapterNumber, input.VerseNumber)
-		err := db.Get(&verse, `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE id = ?`, verseId)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return nil, dbError("error while getting verse from DB", err)
-			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("verse not found: %s.%d", input.BookId, input.ChapterNumber))
-		}
-		return &SingleResponse[Verse]{
-			Body: verse,
-		}, nil
+	}, func(ctx context.Context, input *VersesPathRequest) (*ListResponse[Verse], error) {
+		return serveVerses(store, input.Version, input.BookId, input.From, input.To, input.PaginationRequest)
 	})
 
 	huma.Register(api, huma.Operation{
@@ -766,24 +850,50 @@ No contiene comentarios ni notas teológicas.
 		Method:      http.MethodGet,
 		Path:        "/api/verses/search",
 		Summary:     "Buscar dentro de los versiculos de la biblia",
-		Description: "Devuelve todos los versículos que contengan el texto especificado.",
+		Description: "Devuelve los versículos que contengan el texto especificado. `limit` (por defecto 25, máximo 200) y `offset` recortan `body`, así que el total de coincidencias viaja en la cabecera `X-Total-Count`. `?book=` limita la búsqueda a un libro.",
 		Tags:        []string{"Verses"},
-	}, func(ctx context.Context, input *SearchRequest) (*ListResponse[Verse], error) {
+	}, func(ctx context.Context, input *SearchRequest) (*SearchResponse, error) {
 		db, versionErr := store.pick(input.Version)
 		if versionErr != nil {
 			return nil, versionErr
 		}
-		verses := []Verse{}
-		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses WHERE cleanTextAscii like ? ESCAPE '\'`
-		query, args := paginateSQL(query, []any{"%" + escapeLike(removeAccents(input.Query)) + "%"}, input.PaginationRequest)
-		err := db.Select(&verses, query, args...)
-		if err != nil {
-			return nil, dbError("error while getting verses from DB", err)
+		if input.Book != "" {
+			if err := requireBook(input.Book); err != nil {
+				return nil, err
+			}
 		}
 
-		return &ListResponse[Verse]{
-			Body: verses,
+		// One predicate feeds both the count and the page, so the header cannot describe a
+		// different query than the body did.
+		where := `WHERE cleanTextAscii LIKE ? ESCAPE '\'`
+		args := []any{"%" + escapeLike(removeAccents(input.Query)) + "%"}
+		if input.Book != "" {
+			where += ` AND chapterId LIKE ? ESCAPE '\'`
+			args = append(args, escapeLike(input.Book)+".%")
+		}
+
+		var total int
+		if err := db.Get(&total, `SELECT count(*) FROM verses `+where, args...); err != nil {
+			return nil, dbError("error while counting search results", err)
+		}
+
+		limit := input.Limit
+		if limit == 0 {
+			limit = defaultSearchLimit
+		}
+		query := `SELECT id,chapterId,cleanText,reference,"text",chapterNumber,verseNumber FROM verses ` +
+			where + ` ORDER BY chapterNumber, verseNumber LIMIT ? OFFSET ?`
+
+		verses := []Verse{}
+		if err := db.Select(&verses, query, append(args, limit, input.Offset)...); err != nil {
+			return nil, dbError("error while searching verses in DB", err)
+		}
+
+		return &SearchResponse{
+			Total: total,
+			Body:  verses,
 		}, nil
 	})
-	return mux
+
+	return cacheable(store.fingerprint, mux)
 }
