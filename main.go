@@ -69,8 +69,16 @@ type BookRequest struct {
 	BookId string `path:"bookId" doc:"Identificador del libro bíblico (ej: 'spa-RVR1960:Gen')"`
 }
 
+// PaginationRequest is opt-in: a request without `limit` gets every row, which is the API's
+// original contract.
+//
+// Huma rejects pointer params — "pointers are not supported for form/header/path/query
+// parameters", a panic at registration — so an absent `limit` reaches the handler as 0, and 0 is
+// what paginateSQL reads as "no limit". minimum:"1" is what keeps that sentinel off the wire:
+// Huma validates only the parameters a request actually carried, so an omitted `limit` stays
+// legal while an explicit `limit=0` is a 422 instead of a silent request for the whole table.
 type PaginationRequest struct {
-	Limit  uint `query:"limit" doc:"Número máximo de versículos a devolver (opcional, 0 u omitido = sin límite)"`
+	Limit  uint `query:"limit" minimum:"1" doc:"Número máximo de versículos a devolver (opcional; omitido = sin límite)"`
 	Offset uint `query:"offset" doc:"Cantidad de versículos a omitir (opcional)"`
 }
 

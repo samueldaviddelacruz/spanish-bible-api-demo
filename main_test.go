@@ -363,11 +363,20 @@ func TestPagination(t *testing.T) {
 	}
 	assertVerseIDs(t, body, []string{})
 
-	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=0")
+	// An omitted `limit` still means "no limit" — that is the original contract, and it is the
+	// only way to ask for it now that `limit=0` is rejected.
+	status, body = doGet(t, srv.URL+"/api/verses/search?q=Dios")
 	if status != http.StatusOK {
-		t.Fatalf("limit=0: status = %d, body = %s", status, body)
+		t.Fatalf("no limit: status = %d, body = %s", status, body)
 	}
 	assertVerseIDs(t, body, []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.2"})
+
+	// 0 is the internal "unset" sentinel, so it must not be sendable. It used to mean "no limit"
+	// here, which made a computed page size of 0 fetch the whole table.
+	status, _ = doGet(t, srv.URL+"/api/verses/search?q=Dios&limit=0")
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("limit=0: status = %d, want 422", status)
+	}
 
 	status, body = doGet(t, srv.URL+"/api/books/spa-RVR1960:Gen/verses/chapter/1?limit=2&offset=1")
 	if status != http.StatusOK {
