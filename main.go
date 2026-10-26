@@ -18,8 +18,7 @@ import (
 	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
 	"golang.org/x/text/runes"
@@ -451,10 +450,10 @@ func main() {
 	}
 }
 
-func newRouter(store versions) *chi.Mux {
-	router := chi.NewMux()
+func newRouter(store versions) http.Handler {
+	mux := http.NewServeMux()
 
-	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		if err := store.ping(); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -519,7 +518,7 @@ No contiene comentarios ni notas teológicas.
 			},
 		}
 	}
-	api := humachi.New(router, config)
+	api := humago.New(mux, config)
 
 	huma.Register(api, huma.Operation{
 		Method:      http.MethodGet,
@@ -778,5 +777,5 @@ No contiene comentarios ni notas teológicas.
 			Body: verses,
 		}, nil
 	})
-	return router
+	return mux
 }

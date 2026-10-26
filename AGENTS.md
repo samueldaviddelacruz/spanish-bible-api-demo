@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Single-package Go API (Huma v2 + chi + sqlx) serving Spanish Bible text from SQLite files — one per translation, currently RVR1960, LBLA and NVI. Everything lives in `main.go`; no sub-packages, no frontend.
+Single-package Go API (Huma v2 on `net/http`'s `ServeMux` via the `humago` adapter, plus sqlx) serving Spanish Bible text from SQLite files — one per translation, currently RVR1960, LBLA and NVI. Everything lives in `main.go`; no sub-packages, no frontend.
 
 ## Commands
 - Run: `go run .` — serves on `:8888` (override via `PORT` env). Must run from repo root (DB paths are relative).
 - Verify: `go build ./... && go vet ./... && go test ./...`
 - Smoke test: `curl localhost:8888/api/books` — book IDs contain colons (`spa-RVR1960:Gen`), so quote URLs. `?version=LBLA` reads another translation, and `curl localhost:8888/api/versions` lists them.
-- A book ID is validated on its **shape** — a translation prefix in front of one of the 66 canon codes — so `spa-RVR1960:Genesis` is a 422 while `spa-RVR1960:Lev` is a 404. The distinction is deliberate and tested: the first is not a book ID, the second is a book this translation does not have. It used to be an enum of RVR1960's 66 ids, which cannot know that another translation's ids are just as valid.
+- A book ID is validated on its **shape** — a translation prefix in front of one of the 66 canon codes — so `spa-RVR1960:Genesis` is a 422 (no such canon code) while `spa-RVR1960:Gen` is a 200. A code that is well-formed but absent from that translation is a 404 instead. The distinction is deliberate and tested — `TestGetBook` asks for `spa-RVR1960:Rev` against the fixture, which seeds only a few books — though it is unreachable against the shipped files, where all three translations carry all 66. It used to be an enum of RVR1960's 66 ids, which cannot know that another translation's ids are just as valid.
 - Health check: `GET /health` — 200 if **every** open translation can be read, 503 otherwise. The server shuts down gracefully on SIGTERM/SIGINT.
 
 ## Versions
@@ -49,7 +49,7 @@ The two built translations come from the CLI, which owns the pipeline: `cmd/impo
 ## Environment
 - `GO_ENV=LOCAL` for dev (see `.env.example`; loaded via godotenv). `GO_ENV=PROD|PRODUCTION` sets the OpenAPI `servers` entries from `HOST_URL` (the API Gateway URL) and requires it — that code path is skipped entirely in local dev.
 - The app sits behind AWS API Gateway (`/dev` stage path) in front of EB. `X-Forwarded-Host` is mapped at the gateway; huma's built-in `SchemaLinkTransformer` (installed by `huma.DefaultConfig`) uses it to build the `$schema` URLs in response bodies. Don't reintroduce a custom transformer fork — it was deleted on purpose.
-- The transformer's `Link` header is silently dropped (humachi writes the status before transformers run); only the body `$schema` field reaches clients. Not a bug to chase.
+- The transformer's `Link` header is silently dropped — a property of Huma's own response path rather than of the router adapter (checked against both `humachi` and `humago`); only the body `$schema` field reaches clients. Not a bug to chase.
 
 ## Deployment
 - Push to `master` triggers `.github/workflows/deploy-prod.yml`: `gofmt -l`, `go vet` and `go test` run first; on success it cross-compiles `GOOS=linux GOARCH=arm64 go build .` and zips the whole repo to AWS Elastic Beanstalk. That now means all three databases, so the bundle is about 45 MB — inside EB's limits, but it is why the deploy grew. `.github/workflows/ci.yml` runs the same checks on pull requests.
