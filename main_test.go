@@ -580,6 +580,36 @@ func TestSearch(t *testing.T) {
 	assertVerseIDs(t, body, []string{})
 }
 
+// TestDocsSurviveAStagePrefix covers the reference page behind API Gateway. Huma's built-in page
+// fetched `/openapi.yaml` from the origin root, so `/dev/docs` rendered blank: the spec request fell
+// outside the stage and came back 403. The page we serve names the spec relatively, so the browser
+// resolves it against its own URL and the prefix survives.
+func TestDocsSurviveAStagePrefix(t *testing.T) {
+	srv := httptest.NewServer(http.StripPrefix("/dev", newRouter(oneVersion(setupTestDB(t)))))
+	t.Cleanup(srv.Close)
+
+	status, body := doGet(t, srv.URL+"/dev/docs")
+	if status != http.StatusOK {
+		t.Fatalf("GET /dev/docs: status = %d", status)
+	}
+	page := string(body)
+	if !strings.Contains(page, `apiDescriptionUrl="openapi.yaml"`) {
+		t.Fatalf("docs page must reference the spec relatively, got:\n%.400s", page)
+	}
+	if strings.Contains(page, `apiDescriptionUrl="/openapi.yaml"`) {
+		t.Fatal("docs page still uses an absolute spec URL, which cannot survive a stage prefix")
+	}
+
+	// And the URL the page will resolve must actually serve: inside the stage, not at the root.
+	status, spec := doGet(t, srv.URL+"/dev/openapi.yaml")
+	if status != http.StatusOK {
+		t.Fatalf("GET /dev/openapi.yaml: status = %d", status)
+	}
+	if !strings.Contains(string(spec), "openapi") {
+		t.Fatalf("expected an OpenAPI document, got %.120s", spec)
+	}
+}
+
 func TestCacheRevalidation(t *testing.T) {
 	srv := newTestServer(t)
 	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses?from=1"

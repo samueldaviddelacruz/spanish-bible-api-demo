@@ -728,6 +728,33 @@ func etagMatches(header, tag string) bool {
 	return false
 }
 
+// docsHTML is the API reference page, served by us rather than by Huma's built-in handler for one
+// reason: Huma writes `apiDescriptionUrl="/openapi.yaml"` with a leading slash. A page served from
+// `/dev/docs` then fetches `/openapi.yaml` at the origin root — outside the stage prefix, which is a
+// 403 — and the reference renders blank. A relative reference is resolved against the page's own
+// URL, so "openapi.yaml" becomes `/dev/openapi.yaml` behind the gateway and `/openapi.yaml` on the
+// tunnel hostname, without this service knowing which it is behind.
+const docsHTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="no-referrer">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>API Biblia en español Reference</title>
+    <link rel="stylesheet" href="https://unpkg.com/@stoplight/elements@9.0.15/styles.min.css" crossorigin integrity="sha384-iVQBHadsD+eV0M5+ubRCEVXrXEBj+BqcuwjUwPoVJc0Pb1fmrhYSAhL+BFProHdV">
+    <script src="https://unpkg.com/@stoplight/elements@9.0.15/web-components.min.js" crossorigin integrity="sha384-xjOcq9PZ/k+pGtPS/xcsCRXGjKKfTlIa4H1IYEnC+97jNa6sAMWTNrV6hY08W3GL"></script>
+  </head>
+  <body style="height: 100vh;">
+    <elements-api
+      apiDescriptionUrl="openapi.yaml"
+      router="hash"
+      layout="sidebar"
+      tryItCredentialsPolicy="same-origin"
+    ></elements-api>
+  </body>
+</html>
+`
+
 func newRouter(store versions) http.Handler {
 	mux := http.NewServeMux()
 
@@ -737,6 +764,11 @@ func newRouter(store versions) http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, docsHTML)
 	})
 
 	// The two reading routes that carried real traffic before the merge: 4,978 and 594 requests in
@@ -751,6 +783,9 @@ func newRouter(store versions) http.Handler {
 	})
 
 	config := huma.DefaultConfig("API Biblia en español", "1.0.0")
+	// The built-in docs page is replaced below: it hardcodes an absolute spec URL, which breaks
+	// behind a path prefix. See docsHTML.
+	config.DocsPath = ""
 	config.Info.Contact = &huma.Contact{
 		Name:  "Samuel De La Cruz",
 		Email: "delacruzportorrealsamueldavid@gmail.com",
@@ -794,12 +829,6 @@ No contiene comentarios ni notas teológicas.
 		}
 		hostPath := "dev"
 		serverUrl := fmt.Sprintf("%s/%s", hostUrl, hostPath)
-		config.Servers = []*huma.Server{
-			{
-				URL:         serverUrl,
-				Description: "API URL",
-			},
-		}
 		config.Servers = []*huma.Server{
 			{
 				URL:         serverUrl,
