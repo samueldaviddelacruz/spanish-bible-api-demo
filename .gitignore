@@ -35,7 +35,7 @@ keys.js
 *.db-shm
 *.db-wal
 
-
+.DS_Store
 #output binaries
 spanish-bible-api-demo
 
