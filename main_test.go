@@ -275,6 +275,28 @@ func TestVerses(t *testing.T) {
 		assertVerseIDs(t, body, tc.want)
 	}
 
+	// A range written into one parameter. This is the notation clients actually tried in production
+	// — `23:1-3`, `23:1-23:3`, `4:13-13` — and got 422s for, because the pattern only allowed a
+	// single reference.
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{"/1:1-1:3", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3"}},
+		// A bare number after the hyphen is a verse in the start's chapter, because that is how
+		// readers write Psalm 23:1-3.
+		{"/1:1-2", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2"}},
+		{"/1:2-2:1", []string{"spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1"}},
+		{"/1-2", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2", "spa-RVR1960:Gen.1.3", "spa-RVR1960:Gen.2.1", "spa-RVR1960:Gen.2.2"}},
+		{"?from=1:1-2", []string{"spa-RVR1960:Gen.1.1", "spa-RVR1960:Gen.1.2"}},
+	} {
+		status, body := doGet(t, base+tc.path)
+		if status != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, body = %s", tc.path, status, body)
+		}
+		assertVerseIDs(t, body, tc.want)
+	}
+
 	// A bound the translation does not have is an error, not an empty list. The first two are the
 	// cases the old routes got wrong: a missing start verse used to panic, a missing end verse used
 	// to return a silent empty list. The third used to answer `200 []` for a chapter that is not
@@ -291,6 +313,9 @@ func TestVerses(t *testing.T) {
 		{"inverted chapters", "?from=2&to=1", http.StatusUnprocessableEntity},
 		{"unparsable bound", "?from=abc", http.StatusUnprocessableEntity},
 		{"zero verse", "?from=1:0", http.StatusUnprocessableEntity},
+		{"inverted range", "/1:3-1", http.StatusUnprocessableEntity},
+		{"incomplete range", "/1:1-", http.StatusUnprocessableEntity},
+		{"range closed twice", "/1:1-2?to=3", http.StatusUnprocessableEntity},
 	} {
 		status, body := doGet(t, base+tc.query)
 		if status != tc.want {

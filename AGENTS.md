@@ -22,6 +22,9 @@ Six operations, all `GET` (plus two redirects that exist only for old clients):
 - `?from=1:16` → 1:16 to the end of chapter 1
 - `?from=1&to=3` → chapters 1 to 3
 - `?from=1:1&to=2:25` → across a chapter boundary
+- `?from=1:1-2:25` or `/verses/23:1-3` → the same range written in one parameter; a bare number after the hyphen is a verse in the start's chapter, because that is how readers write Psalm 23:1-3
+
+**The hyphenated range is not decoration either.** Production logs showed the client writing `23:1-3`, `23:1-23:3` and `4:13-13` and getting 422s for all three, because the path pattern only accepted a single reference. `expandRange` splits it before the rest of the parser runs, so one parameter can carry a whole range. Giving the end twice — `/verses/1:1-2?to=3` — is a 422 rather than a silent preference for one of them.
 
 **The `/{from}` form is not redundant, so don't delete it.** Fifteen months of nginx access logs showed ~19,800 requests to `/api/books/{book}/verses/1` and `…/verses/1:16` — a Flutter client (user agents `Dart/3.x`) that assumed exactly this shape and got a 404 every time, from August 2025 into October 2026. It feeds the same `serveVerses` as the query form, differs only in where the bound is written, and `?to=` closes the range.
 
