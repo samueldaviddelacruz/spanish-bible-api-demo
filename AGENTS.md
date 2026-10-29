@@ -84,7 +84,18 @@ The two built translations come from the CLI, which owns the pipeline: `cmd/impo
 - The transformer's `Link` header is silently dropped — a property of Huma's own response path rather than of the router adapter (checked against both `humachi` and `humago`); only the body `$schema` field reaches clients. Not a bug to chase.
 
 ## Deployment
-- Push to `master` triggers `.github/workflows/deploy-prod.yml`: `gofmt -l`, `go vet` and `go test` run first; on success it cross-compiles `GOOS=linux GOARCH=arm64 go build .` and zips the whole repo to AWS Elastic Beanstalk. That now means all three databases, so the bundle is about 62 MB raw and about 19 MB zipped — inside EB's limits, but it is why the deploy grew (it is also what lets the same zip fit Lambda's 50 MB direct-upload limit, if that ever matters). `.github/workflows/ci.yml` runs the same checks on pull requests.
+**The API runs on a Raspberry Pi at home**, reached through a Cloudflare tunnel, since 2026-10-29. The Elastic Beanstalk environment was terminated that day; nothing deploys to AWS any more.
+
+How it is served now:
+
+```
+clients → Cloudflare edge (TLS, cache on /api/*) → cloudflared → Pi :8888
+clients → API Gateway (/dev stage) → same host → same tunnel → same Pi
+```
+
+- **Two hostnames, one origin.** `bible.codecrocs.dev` is the Pi directly. `https://ajphchgh0i.execute-api.us-west-2.amazonaws.com/dev` is the old client URL, kept because clients are pinned to it: its `{proxy+}` integration points at the tunnel. That means the gateway host needs the `/dev` stage prefix and the domain does not — a path that is right on one is wrong on the other.
+- **Deploying is manual**: `GOOS=linux GOARCH=arm64 go build`, copy the binary to `/opt/spanish-bible/`, `systemctl restart bible-api`. Copy to a `.new` name and `mv` over the old one — `scp` straight onto a running binary fails with `ETXTBSY`.
+- **On the Pi**: `bible-api.service` (the API, `GO_ENV=PROD`, `HOST_URL` set so the OpenAPI `servers` entry is the gateway) and `cloudflared.service` (tunnel config in `/etc/cloudflared/`). Both enabled at boot.
+- `.github/workflows/deploy-prod.yml` now only builds: vet, test, cross-compile. The zip and EB deploy steps are commented out with the reason; restoring them needs the EB application recreated.
 - Both workflows read the Go version from `go.mod` (`go-version-file`), so it cannot drift from the toolchain the module declares.
-- `Procfile` runs `./spanish-bible-api-demo` — binary name comes from the module basename, so don't rename the module.
-- `.platform/nginx/conf.d/cors.conf` is the EB nginx CORS config; keep it in sync with any CORS changes.
+- `Procfile` and `.platform/nginx/conf.d/cors.conf` are EB leftovers, kept only in case EB comes back. **CORS is now answered by the app** (`cors` in `main.go`), because the Pi has no nginx to add the header — that was a real outage: a browser client passed preflight (the gateway's MOCK) and then had the response blocked.

@@ -42,7 +42,7 @@ jobs:
     - name: Test
       run: go test ./... -count=1
 
-    # This is a server: huma and chi serve each request on its own goroutine, so the detector has
+    # This is a server: net/http serves each request on its own goroutine, so the detector has
     # something to check. Expensive enough to be its own step.
     - name: Test with the race detector
       run: go test -race ./... -count=1

@@ -1,4 +1,8 @@
-name: Deploy master to EBS
+name: Build master (deploy disabled)
+# The Elastic Beanstalk environment this used to deploy to was terminated on 2026-10-29. The API is now
+# served from the Raspberry Pi behind a Cloudflare tunnel (bible.codecrocs.dev), which is deployed by
+# hand. The EB steps are left below, commented out, so the shape of the pipeline is still visible:
+# restoring them means recreating the EB application and environment, and the secrets existing again.
 on:
   push:
     branches:
@@ -7,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    
+
     - name: Checkout source code
       uses: actions/checkout@v4
 
@@ -23,18 +27,23 @@ jobs:
     - name: Test
       run: go test ./... -count=1
 
-    - run: GOOS=linux GOARCH=arm64 go build .
+    # Kept because this is the build the Pi actually runs: a push that does not cross-compile for
+    # arm64 is a push that cannot be deployed, and that is worth knowing on every commit.
+    - name: Cross-compile for the Pi
+      run: GOOS=linux GOARCH=arm64 go build .
 
-    - name: Generate deployment package
-      run: zip -r ${{github.SHA}}.zip . -x '*.git*'
-      
-    - name: Deploy to EB
-      uses: einaregilsson/beanstalk-deploy@v22
-      with:
-        aws_access_key: ${{ secrets.AWS_CI_CD_ACCESS_KEY_ID }}
-        aws_secret_key: ${{ secrets.AWS_CI_CD_SECRET_ACCESS_KEY }}
-        application_name: Bible-API-14-5-2025
-        environment_name: Bible-API-14-5-2025-env
-        version_label: Version_${{github.SHA}}
-        region: us-west-2
-        deployment_package: ${{github.SHA}}.zip
+    # --- Deployment: disabled while there is no environment to deploy to --------------------------
+    #
+    # - name: Generate deployment package
+    #   run: zip -r ${{github.SHA}}.zip . -x '*.git*'
+    #
+    # - name: Deploy to EB
+    #   uses: einaregilsson/beanstalk-deploy@v22
+    #   with:
+    #     aws_access_key: ${{ secrets.AWS_CI_CD_ACCESS_KEY_ID }}
+    #     aws_secret_key: ${{ secrets.AWS_CI_CD_SECRET_ACCESS_KEY }}
+    #     application_name: Bible-API-14-5-2025
+    #     environment_name: Bible-API-14-5-2025-env
+    #     version_label: Version_${{github.SHA}}
+    #     region: us-west-2
+    #     deployment_package: ${{github.SHA}}.zip
