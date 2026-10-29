@@ -635,6 +635,48 @@ func TestDocsSurviveAStagePrefix(t *testing.T) {
 	}
 }
 
+// TestCORSHeaders covers what a browser needs and Elastic Beanstalk's nginx used to provide. The Pi has
+// no nginx, and without this a browser passes preflight and then cannot read the response at all.
+func TestCORSHeaders(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Preflight: the app must answer it itself, since only the gateway has a MOCK integration.
+	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/books", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("preflight Access-Control-Allow-Origin = %q, want *", got)
+	}
+
+	// The actual response needs the header too — this is the part that was missing in production.
+	for _, path := range []string{"/api/books", "/api/books/spa-RVR1960:Gen", "/api/nope"} {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "https://example.com")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Fatalf("GET %s: Access-Control-Allow-Origin = %q, want *", path, got)
+		}
+	}
+}
+
 func TestCacheRevalidation(t *testing.T) {
 	srv := newTestServer(t)
 	url := srv.URL + "/api/books/spa-RVR1960:Gen/verses?from=1"
@@ -692,6 +734,25 @@ func TestCacheRevalidation(t *testing.T) {
 	}
 	if got := notFound.Header.Get("ETag"); got != "" {
 		t.Fatalf("404 carried an ETag %q, want none", got)
+	}
+
+	// The documents that describe the API live on a shorter leash than the data they describe: a
+	// stale spec sends clients to stale paths, which is exactly what happened in production.
+	spec, err := http.Get(srv.URL + "/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = spec.Body.Close()
+	if got := spec.Header.Get("Cache-Control"); got != "public, max-age=60" {
+		t.Fatalf("/openapi.json Cache-Control = %q, want public, max-age=60", got)
+	}
+	docs, err := http.Get(srv.URL + "/docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = docs.Body.Close()
+	if got := docs.Header.Get("Cache-Control"); got != "public, max-age=60" {
+		t.Fatalf("/docs Cache-Control = %q, want public, max-age=60", got)
 	}
 
 	// The health check is a live probe, not content.

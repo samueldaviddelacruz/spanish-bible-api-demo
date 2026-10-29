@@ -703,6 +703,59 @@ func withQuery(target string, r *http.Request) string {
 // cacheable marks responses as revalidatable. Every response is a pure function of the databases,
 // and their fingerprint changes only when the service is redeployed, so the fingerprint is a valid
 // version for every URL — including `/openapi.json` and the schema documents.
+// cors answers preflight and marks every response readable from any origin.
+//
+// On Elastic Beanstalk this was nginx's job: `add_header 'Access-Control-Allow-Origin' '*' always`
+// in .platform/nginx/conf.d/cors.conf. The Pi has no nginx, so the header disappeared — and a browser
+// client then passes preflight (the gateway's MOCK integration answers that) and has the *actual*
+// response blocked, which is indistinguishable from "the API returns no data".
+//
+// It sits outside the cache middleware so that 304s, redirects and error responses carry the header
+// too: a browser has to be able to read an error body to know what went wrong.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		header.Set("Access-Control-Allow-Origin", "*")
+		header.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+		header.Set("Access-Control-Allow-Headers",
+			"Content-Type, Authorization, X-Api-Key, X-Amz-Date, X-Amz-Security-Token")
+		header.Set("Access-Control-Max-Age", "86400")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent) // preflight: headers only, no body.
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// buildIdentity identifies the running binary, and belongs in the cache fingerprint alongside the
+// databases. The OpenAPI document and the docs page are functions of the code, not of the data: keyed
+// to the databases alone, a redeploy that changed the spec produced the same ETag, so a browser
+// revalidated to 304 and kept yesterday's document — and sent its requests to yesterday's paths.
+func buildIdentity() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "unknown"
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%s:%d:%d", exe, info.Size(), info.ModTime().UnixNano())
+}
+
+// cacheControlFor keeps the documents that describe the API on a short leash. The Bible text never
+// changes between deploys; the description of it does.
+func cacheControlFor(path string) string {
+	switch {
+	case path == "/docs", strings.HasPrefix(path, "/openapi."), strings.HasPrefix(path, "/schemas/"):
+		return "public, max-age=60"
+	default:
+		return "public, max-age=3600"
+	}
+}
+
 func cacheable(fingerprint string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path == "/health" {
@@ -711,13 +764,14 @@ func cacheable(fingerprint string, next http.Handler) http.Handler {
 		}
 
 		tag := etagFor(fingerprint, r.URL.RequestURI())
+		cacheControl := cacheControlFor(r.URL.Path)
 		if etagMatches(r.Header.Get("If-None-Match"), tag) {
 			w.Header().Set("ETag", tag)
-			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("Cache-Control", cacheControl)
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		next.ServeHTTP(&cacheOn200{ResponseWriter: w, tag: tag}, r)
+		next.ServeHTTP(&cacheOn200{ResponseWriter: w, tag: tag, cacheControl: cacheControl}, r)
 	})
 }
 
@@ -729,8 +783,9 @@ func cacheable(fingerprint string, next http.Handler) http.Handler {
 // caller who mistypes a range would keep seeing that error after fixing it.
 type cacheOn200 struct {
 	http.ResponseWriter
-	tag       string
-	wroteHead bool
+	tag          string
+	cacheControl string
+	wroteHead    bool
 }
 
 func (c *cacheOn200) WriteHeader(status int) {
@@ -738,7 +793,7 @@ func (c *cacheOn200) WriteHeader(status int) {
 		c.wroteHead = true
 		if status == http.StatusOK {
 			c.Header().Set("ETag", c.tag)
-			c.Header().Set("Cache-Control", "public, max-age=3600")
+			c.Header().Set("Cache-Control", c.cacheControl)
 		} else {
 			c.Header().Set("Cache-Control", "no-store")
 		}
@@ -1032,5 +1087,7 @@ No contiene comentarios ni notas teológicas.
 		}, nil
 	})
 
-	return cacheable(store.fingerprint, mux)
+	// The cache key covers the data *and* the binary: see buildIdentity. CORS wraps the outside so
+	// that 304s, redirects and errors are readable from a browser too.
+	return cors(cacheable(store.fingerprint+"|"+buildIdentity(), mux))
 }
